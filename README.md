@@ -17,92 +17,101 @@ Measured in a household with 34 Hue lights: one LED strip sat dark for tens of
 minutes several times an evening while its group happily reported `on`. In one
 case for 55 minutes straight.
 
-## What this integration does
+## What it does
 
-1. **Catches** every light request that passes through Home Assistant —
+1. **Catches** every light request that passes through Home Assistant --
    automations, dashboards, HomeKit, Siri, voice assistants.
 2. **Translates** it into a concrete target state per lamp. For scenes that comes
    straight from the definition on the Hue bridge, so brightness and colour are
    included, not just on/off.
-3. **Verifies** what actually happened -- after a short pause, and after the
-   bridge has stopped working through the request.
+3. **Verifies** what actually happened, once the bridge has stopped working
+   through the request.
 4. **Corrects** each deviating lamp *individually*, paced to what the bridge can
    take. Individual is the whole point: a single-target command does get
-   acknowledged. The pacing matters too -- see below.
-5. **Reports** what could not be fixed after all attempts, and keeps count of how
-   often it had to step in.
+   acknowledged.
+5. **Reports** what could not be fixed, and keeps count of how often it stepped
+   in and for which lamp.
 
 Works without any configuration. Every setting has a defensible default.
 
 ## Installation
 
-### Through HACS
+**Through HACS.** Add this repository as a custom repository (category:
+Integration), install Hue Insist, restart Home Assistant, then add the
+integration under **Settings → Devices & Services → Add Integration**.
 
-Add this repository as a custom repository (category: Integration), install Hue
-Insist, restart Home Assistant, then add the integration under
-**Settings → Devices & Services → Add Integration**.
-
-### Manually
-
-Copy `custom_components/hue_insist` into the `custom_components` folder of your
-Home Assistant configuration and restart.
+**Manually.** Copy `custom_components/hue_insist` into the `custom_components`
+folder of your Home Assistant configuration and restart.
 
 ## Options
+
+Everything is adjustable from the integration's options, and changes take effect
+immediately -- no restart.
+
+**What to watch**
+
+| Option | Default | Notes |
+|---|---|---|
+| Watch individual lights | on | Requests aimed at a single lamp |
+| Watch groups and rooms | on | Requests aimed at a Hue room or zone |
+| Watch scenes | on | Requests aimed at a scene |
+| Lights to skip | empty | Lamps to leave alone entirely |
+
+**What counts as wrong**
+
+| Option | Default | Notes |
+|---|---|---|
+| Verify brightness as well | on | Not just on/off, but the dim level too |
+| Verify colour as well | on | Colour temperature and xy colour |
+| Brightness tolerance (0-255) | 8 | A little over 3% |
+| Colour temperature tolerance (mired) | 15 | Smaller differences are not visible |
+| Skip unavailable lamps | on | Lamps reporting `unavailable` are not verified |
+| Correct anyway, even when they report unavailable | empty | Per-lamp exceptions to the line above |
+
+**Timing**
 
 | Option | Default | Notes |
 |---|---|---|
 | Number of attempts | 3 | How often a deviating lamp is retried |
 | Minimum wait before verifying | 2 s | Floor under every check, and the pause between attempts |
-| Watch individual lights | on | Requests aimed at a single lamp |
-| Watch groups and rooms | on | Requests aimed at a Hue room or zone |
-| Watch scenes | on | Requests aimed at a scene |
-| Verify brightness | on | Not just on/off, but the dim level too |
-| Verify colour | on | Colour temperature and xy colour |
-| Excluded lights | empty | Lamps you want left alone |
-| Skip unavailable lamps | on | Lamps reporting `unavailable` are not verified |
-| Correct anyway | empty | Exceptions to the line above |
-| Brightness tolerance | 8 | On a 0-255 scale, a little over 3% |
-| Colour temperature tolerance | 15 mired | Smaller differences are not visible |
-| Maximum extra wait for the bridge | 15 s | Ceiling on waiting for a large request to finish; 0 disables |
+| Maximum extra wait for the bridge to finish | 15 s | Ceiling on waiting for a large request; 0 disables |
 | Maximum commands per second | 10 | How fast corrections are sent to the bridge |
+
+**Diagnostics**
+
+| Option | Default | Notes |
+|---|---|---|
 | Verbose logging | off | A line per request, per deviating lamp and per correction |
 
-### The two waits, and why there are two
-
-**Minimum wait** is the grace period the bridge gets to start. Right after a
-command no lamp has reported back yet, so a check at that moment would judge the
-bridge before it began -- and every lamp would look like it had missed the
-message. Nothing is ever verified sooner than this.
-
-**Maximum extra wait** is the ceiling on what comes after: once the minimum has
-passed, verification holds off for as long as the lamps are still changing state.
-
-So the first is a floor and the second is a ceiling, and they never overlap. A
-single lamp is verified after the minimum wait and no longer, because a bridge
-that has already finished produces no further state changes. A request touching
-thirty lamps is verified once the bridge actually stops working, however long
-that takes, up to the ceiling.
-
-Setting the ceiling to 0 leaves only the fixed minimum -- the behaviour before
-this was added.
-
-### Why it waits for the bridge
+### The two waits
 
 A fixed verification delay is right for one lamp and wrong for a whole house.
 Switching thirty lamps takes the bridge several seconds, so checking the result
 after two means "correcting" lamps whose turn had simply not come yet -- and
 those corrections pile onto the queue that is already the bottleneck. The
-integration ends up racing the bridge and losing.
+integration ends up racing the bridge and losing. Hence two settings rather than
+one.
 
-Rather than guess how long the bridge needs, it watches the bridge work. Every
-lamp the bridge reaches updates its state in Home Assistant; once those updates
-stop for a second, the request has been carried out as far as it is going to be.
-Only then is anything judged.
+**Minimum wait** is the floor: the grace period the bridge gets to start. Right
+after a command no lamp has reported back yet, so a check at that moment would
+judge the bridge before it began and every lamp would look like it had missed
+the message.
+
+**Maximum extra wait** is the ceiling on what comes after. Once the minimum has
+passed, verification holds off for as long as the lamps are still changing state:
+rather than guessing how long the bridge needs, watch it work. Every lamp it
+reaches updates its state in Home Assistant, so once those updates stop for a
+second the request has been carried out as far as it is going to be.
+
+The two never overlap. A single lamp is verified after the minimum wait and no
+longer, because a bridge that has already finished produces no further state
+changes -- so nothing got slower. A request touching thirty lamps is verified
+once the bridge actually stops, however long that takes, up to the ceiling. The
+ceiling exists for the lamp that never stops changing; setting it to 0 leaves
+only the fixed minimum.
 
 Measured: a request the bridge spends four seconds on is verified after about
-five. A request it has already finished is verified immediately, so a single lamp
-is no slower than before. The timeout is there for the lamp that never stops
-changing.
+five.
 
 ### Why the commands are paced
 
@@ -112,15 +121,15 @@ thirty corrections at once therefore repairs almost nothing and adds to the
 congestion that caused the problem.
 
 Measured: thirty lamps take about three seconds to correct at the default rate.
-That is longer than the two-second verification delay, which is fine -- the next
-check simply shifts along. Raise the rate if your bridge keeps up; lower it if
-corrections still go missing.
+That is longer than the minimum wait, which is fine -- the next check simply
+shifts along. Raise the rate if your bridge keeps up; lower it if corrections
+still go missing.
 
 ### Verbose logging
 
 The switch sets the log level for this integration on the fly, so there is no
 need to edit `configuration.yaml` or restart. Turning it off restores whatever
-level was configured before.
+level was configured before, so a deliberate `logger:` setting is left intact.
 
 What it writes, per request:
 
@@ -139,10 +148,10 @@ The reason per lamp is the useful part. "off, expected on" is a missed command;
 "brightness 140, expected 254" is a lamp that got the message but landed
 somewhere else. Only the first is the problem this integration was built for.
 
-## Entities
+## Sensors
 
-All sensors are diagnostic and survive a restart, so a problem that happens a few
-times a day still adds up to a number.
+All sensors are diagnostic and survive a restart -- counters and timestamps
+alike -- so a problem that happens a few times a day still adds up to a number.
 
 **Is it running?**
 
@@ -163,15 +172,19 @@ categories, so the three splits can add up to more than the total.
 |---|---|
 | `sensor.hue_insist_checked_devices` | Lamp states verified, after expanding scenes and groups |
 | `sensor.hue_insist_no_correction_needed` | ... of which were already correct |
-| `sensor.hue_insist_corrections` | How often a lamp had to be nudged |
-| `sensor.hue_insist_failures` | How often that did not work after all attempts |
+| `sensor.hue_insist_corrections` | How many lamps had to be nudged |
+| `sensor.hue_insist_failures` | How many did not respond after all attempts |
 | `sensor.hue_insist_last_correction` | When a lamp was last nudged |
 | `sensor.hue_insist_last_failure` | When a lamp last refused; the `entities` attribute names it |
 
 The gap between checked devices and corrections is the interesting number. It
 turns "I think that lamp misses commands sometimes" into evidence, and it names
-the lamp. Checks are counted once per request rather than once per retry round,
-so a single stubborn lamp cannot inflate the ratio.
+the lamp.
+
+Both checks and corrections are counted once per request rather than once per
+retry round. A lamp that needs three attempts is still one lamp that needed
+nudging; counting per round would multiply it by the retry count and push
+corrections above the number of lamps checked, which is impossible on its face.
 
 ## Events
 
@@ -182,7 +195,18 @@ so a single stubborn lamp cannot inflate the ratio.
 
 Both carry `entities` and `source`, so you can hang a notification off them.
 
-## Not only Hue
+## Finding a bad lamp
+
+Turn on verbose logging and leave it for a day. Then read
+`sensor.hue_insist_corrections` against `sensor.hue_insist_checked_devices`, and
+grep the log for the lamps that keep appearing. A lamp that shows up as "off,
+expected on" several times an evening has a range problem; one that never appears
+is fine. That is the diagnosis this integration exists to produce -- the repair
+is a side effect.
+
+## How it works
+
+### Not only Hue
 
 The catching is integration-agnostic: every `light.turn_on`, `light.turn_off`
 and `light.toggle` that passes through Home Assistant is verified, whatever
@@ -192,12 +216,12 @@ uniquely Hue problem.
 
 The Hue bridge is only needed to expand scenes and groups into their members and
 to know what a scene means per lamp. Everything else -- the state check, the
-per-lamp correction -- runs entirely on Home Assistant's own view of the entity.
+per-lamp correction -- runs on Home Assistant's own view of the entity.
 
-## How it reaches the Hue bridge
+### Reaching the bridge
 
-The integration reuses the credentials of the existing Hue integration in Home
-Assistant. No second pairing, no pressing the button again.
+The integration reuses the credentials of the existing Hue integration. No second
+pairing, no pressing the button again.
 
 The mapping between bridge and Home Assistant is exact: the Hue integration uses
 the bridge resource id directly as the entity's `unique_id`, so a lookup in the
@@ -205,44 +229,45 @@ entity registry is enough. Groups go through `room.children` → device → ligh
 service, because a room points at devices rather than at lights.
 
 Without a Hue bridge the integration still works: group expansion falls back to
-the `entity_id` attribute Home Assistant puts on group entities itself, and scenes
-are not expanded.
+the `entity_id` attribute Home Assistant puts on group entities itself, and
+scenes are not expanded.
 
-## What it cannot see
+## What it deliberately does not judge
 
-**Control straight from the Hue app.** That never passes through Home Assistant
-and is therefore invisible. Everything that does go through Home Assistant —
-including HomeKit and Siri, as long as they run through the Home Assistant
-bridge — is covered.
-
-**Colour across modes.** A light reports only the attribute belonging to the
-colour mode it is currently in, so a lamp sitting in xy has no colour temperature
-to compare against. Converting between the two loses far too much to judge on --
-Home Assistant's own round trip through xy comes back over a hundred mired out at
-warm white, well past any sane tolerance. Such a mismatch is logged and left
-alone rather than corrected forever.
-
-Third-party Zigbee bulbs joined to a Hue bridge are the usual cause: the bridge
-resolves the requested colour temperature to xy for that lamp's gamut, and xy is
-what comes back.
+The rule throughout: never report a failure that can never be fixed. A lamp
+condemned for something it cannot do would be corrected every round, fail every
+time, and bury the real problems.
 
 **Anything a lamp cannot do.** Verification is limited to the capabilities the
 entity reports through `supported_color_modes`. A Hue smart plug reports
 `["onoff"]`: it has no brightness, so a scene brightness is neither checked
-against it nor sent to it. Without that a plug deviates on every check, is
-corrected every round and reported as failed every time -- for doing exactly
-what it was asked.
+against it nor sent to it.
 
-**Unavailable lamps**, by default. A lamp reporting `unavailable` is skipped and
-does not count as a failure -- a bulb behind a door switch would otherwise be
-retried every round and fail every time.
+**Colour across colour modes.** A light reports only the attribute belonging to
+the mode it is currently in, so a lamp sitting in xy has no colour temperature to
+compare against. Converting between the two loses far too much to judge on --
+Home Assistant's own round trip from 2278K through xy returns 1718K, over 140
+mired out against a tolerance of 15. Such a mismatch is logged, with what the
+lamp actually reports, and left alone. Third-party Zigbee bulbs joined to a Hue
+bridge are the usual cause: the bridge resolves the requested colour temperature
+to xy for that lamp's gamut, and xy is what comes back.
 
-That default can be turned off globally, and there is a per-lamp exception list
-for the cases where it gets in the way. The case this was built for: a Hue lamp
-that no longer physically exists but is kept around as a proxy, its state read to
-drive non-Hue hardware. Such a lamp reports `unavailable` while the command still
-has to reach it. Lamps on the exception list are corrected blindly and are left
-out of the failure tally, because there is nothing to verify against.
+**Unavailable lamps**, by default. A bulb behind a door switch would otherwise be
+retried every round and fail every time. That default can be turned off globally,
+and there is a per-lamp exception list for the cases where it gets in the way.
+
+The case the exception list was built for: a Hue lamp that no longer physically
+exists but is kept around as a proxy, its state read to drive non-Hue hardware.
+Such a lamp reports `unavailable` while the command still has to reach it. Lamps
+on the list are corrected blindly and left out of the failure tally, because
+there is nothing to verify against.
+
+## What it cannot see
+
+**Control straight from the Hue app.** That never passes through Home Assistant
+and is therefore invisible. Everything that does go through Home Assistant --
+including HomeKit and Siri, as long as they run through the Home Assistant
+bridge -- is covered.
 
 ## Licence
 
