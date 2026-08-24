@@ -4,18 +4,27 @@ Makes sure a light command is actually carried out.
 
 ## The problem
 
-A Hue group or scene is sent over Zigbee as a **groupcast**. Groupcast is not
-acknowledged per lamp and is therefore never retried: a bulb with marginal range
-misses the message for good. Individual light commands are sent as unicast, which
-*is* acknowledged and which the Zigbee stack retries on its own.
+You switch on the kitchen and one lamp stays dark. You do it again and it works
+fine. Home Assistant reports nothing wrong: the automation ran, the scene was
+applied, the group is on.
 
-Home Assistant never notices, because a group already counts as "on" the moment a
-single member lights up. The result is a room that comes on halfway, with no error
-and nothing to correct it.
+The cause sits one layer down, in Zigbee. A group or scene goes out as a
+**groupcast** -- a single message to every lamp at once, which no lamp
+acknowledges and which is therefore never resent. A bulb that is awkwardly placed
+or briefly busy misses it, and no error is raised anywhere. A command aimed at one lamp
+goes out as **unicast** instead: acknowledged, and resent by the Zigbee stack
+itself when that acknowledgement fails to arrive.
 
-Measured in a household with 34 Hue lights: one LED strip sat dark for tens of
-minutes several times an evening while its group happily reported `on`. In one
-case for 55 minutes straight.
+Home Assistant cannot tell the two apart, because a group counts as "on" the
+moment one member lights up. So the room comes on halfway and stays that way
+until somebody notices and presses again.
+
+In the house this was built for -- 34 Hue lights -- one LED strip did exactly
+that several times an evening, sitting dark for tens of minutes while its group
+reported on. Once for 55 minutes straight.
+
+That is the gap this integration closes: it re-sends the missed command as
+unicast, so the lamp gets a message it has to acknowledge.
 
 ## What it does
 
