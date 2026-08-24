@@ -35,7 +35,10 @@ DEFAULT_SKIP_UNAVAILABLE = True
 HUE_BRIGHTNESS_MAX = 100.0
 HA_BRIGHTNESS_MAX = 255.0
 
-SIGNAL_JOB_FINISHED = f"{DOMAIN}_job_finished"
+# Internal refresh signal for the diagnostic sensors. Deliberately a dispatcher
+# signal and not an event: the event bus is a public interface, and "a counter
+# went up" is nobody else's business.
+SIGNAL_STATS_UPDATED = f"{DOMAIN}_stats_updated"
 
 EVENT_CORRECTED = f"{DOMAIN}_corrected"
 EVENT_FAILED = f"{DOMAIN}_failed"

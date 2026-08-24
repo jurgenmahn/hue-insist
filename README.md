@@ -64,14 +64,37 @@ Home Assistant configuration and restart.
 
 ## Entities
 
+All sensors are diagnostic and survive a restart, so a problem that happens a few
+times a day still adds up to a number.
+
+**Is it running?**
+
 | Entity | Meaning |
 |---|---|
+| `sensor.hue_insist_captured_actions` | Light requests caught |
+| `sensor.hue_insist_captured_scene_actions` | ... of which aimed at a scene |
+| `sensor.hue_insist_captured_group_actions` | ... at a room or zone |
+| `sensor.hue_insist_captured_device_actions` | ... at a single lamp |
+| `sensor.hue_insist_last_action` | When the last request came in |
+
+A request that targets a group and a loose lamp at once is counted in both
+categories, so the three splits can add up to more than the total.
+
+**Is anything wrong?**
+
+| Entity | Meaning |
+|---|---|
+| `sensor.hue_insist_checked_devices` | Lamp states verified, after expanding scenes and groups |
+| `sensor.hue_insist_no_correction_needed` | ... of which were already correct |
 | `sensor.hue_insist_corrections` | How often a lamp had to be nudged |
 | `sensor.hue_insist_failures` | How often that did not work after all attempts |
-| `sensor.hue_insist_last_failure` | Which lamp last refused to respond |
+| `sensor.hue_insist_last_correction` | When a lamp was last nudged |
+| `sensor.hue_insist_last_failure` | When a lamp last refused; the `entities` attribute names it |
 
-That first sensor is more than a counter: it shows which lamp has structurally
-poor range. That is information you otherwise simply do not have.
+The gap between checked devices and corrections is the interesting number. It
+turns "I think that lamp misses commands sometimes" into evidence, and it names
+the lamp. Checks are counted once per request rather than once per retry round,
+so a single stubborn lamp cannot inflate the ratio.
 
 ## Events
 

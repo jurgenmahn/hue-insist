@@ -24,14 +24,18 @@ from typing import Any
 
 from homeassistant.const import ATTR_ENTITY_ID, STATE_ON
 from homeassistant.core import Context, Event, HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.util import dt as dt_util
 
 from .const import (
     EVENT_CORRECTED,
     EVENT_FAILED,
+    SIGNAL_STATS_UPDATED,
     HA_BRIGHTNESS_MAX,
     HUE_BRIGHTNESS_MAX,
 )
 from .hue_api import HueDefinitions
+from .stats import Stats
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -113,9 +117,7 @@ class Watcher:
         self.definitions = definitions
         self.options = options
         self._own_contexts: set[str] = set()
-        self.corrections = 0
-        self.failures = 0
-        self.last_failure: str | None = None
+        self.stats = Stats()
 
     @callback
     def handle_event(self, event: Event) -> None:
@@ -129,26 +131,43 @@ class Watcher:
         if event.context and event.context.id in self._own_contexts:
             return
 
+        kinds: set[str] = set()
         if domain == "light" and service in ("turn_on", "turn_off", "toggle"):
-            targets = self._targets_for_light(service, data.get("service_data", {}))
+            targets = self._targets_for_light(service, data.get("service_data", {}), kinds)
             source = f"light.{service}"
         elif domain == "scene" and service == "turn_on" and self.options.watch_scenes:
             targets = self._targets_for_scene(data.get("service_data", {}))
             source = "scene.turn_on"
+            if targets:
+                kinds.add("scene")
         else:
             return
 
         targets = {e: t for e, t in targets.items() if e not in self.options.excluded}
-        if targets:
-            self.hass.async_create_task(
-                self._verify(Job(targets=targets, source=source))
-            )
+        if not targets:
+            return
+
+        self.stats.actions_total += 1
+        self.stats.last_action = dt_util.utcnow()
+        if "scene" in kinds:
+            self.stats.actions_scene += 1
+        if "group" in kinds:
+            self.stats.actions_group += 1
+        if "device" in kinds:
+            self.stats.actions_device += 1
+        self._publish()
+
+        self.hass.async_create_task(
+            self._verify(Job(targets=targets, source=source))
+        )
 
     def _entities_from(self, service_data: dict[str, Any]) -> list[str]:
         raw = service_data.get(ATTR_ENTITY_ID) or []
         return [raw] if isinstance(raw, str) else list(raw)
 
-    def _targets_for_light(self, service: str, data: dict[str, Any]) -> dict[str, Target]:
+    def _targets_for_light(
+        self, service: str, data: dict[str, Any], kinds: set[str]
+    ) -> dict[str, Target]:
         targets: dict[str, Target] = {}
         for entity in self._entities_from(data):
             members = self.definitions.group_members(entity)
@@ -158,6 +177,7 @@ class Watcher:
                 continue
             if not is_group and not self.options.watch_lights:
                 continue
+            kinds.add("group" if is_group else "device")
 
             if service == "toggle":
                 # The intended end state depends on the state right now, so it
@@ -190,6 +210,13 @@ class Watcher:
                 for lamp, target in job.targets.items()
                 if self._deviates(lamp, target)
             }
+            if attempt == 1:
+                # Counted once per request, not once per round: a single
+                # stubborn lamp would otherwise dominate the totals.
+                self.stats.devices_checked += len(job.targets)
+                self.stats.devices_ok += len(job.targets) - len(deviating)
+                self._publish()
+
             if not deviating:
                 if attempt > 1:
                     _LOGGER.debug("All correct after attempt %d", attempt)
@@ -200,7 +227,9 @@ class Watcher:
                 attempt, len(deviating), ", ".join(deviating),
             )
             await self._correct(deviating)
-            self.corrections += len(deviating)
+            self.stats.corrections += len(deviating)
+            self.stats.last_correction = dt_util.utcnow()
+            self._publish()
             self.hass.bus.async_fire(
                 EVENT_CORRECTED,
                 {"entities": list(deviating), "attempt": attempt, "source": job.source},
@@ -214,11 +243,13 @@ class Watcher:
             if self._deviates(l, t) and not self._unverifiable(l)
         ]
         if remaining:
-            self.failures += len(remaining)
-            self.last_failure = ", ".join(remaining)
+            self.stats.failures += len(remaining)
+            self.stats.last_failure = dt_util.utcnow()
+            self.stats.last_failed_entities = remaining
+            self._publish()
             _LOGGER.warning(
                 "Gave up after %d attempts: %s (triggered by: %s)",
-                self.options.retries, self.last_failure, job.source,
+                self.options.retries, ", ".join(remaining), job.source,
             )
             self.hass.bus.async_fire(
                 EVENT_FAILED,
@@ -271,6 +302,11 @@ class Watcher:
                 if difference > self.options.mirek_tolerance:
                     return True
         return False
+
+    @callback
+    def _publish(self) -> None:
+        """Tell the diagnostic sensors their numbers moved."""
+        async_dispatcher_send(self.hass, SIGNAL_STATS_UPDATED)
 
     def _unverifiable(self, lamp: str) -> bool:
         """Is this a lamp we correct blindly, without being able to check?"""
