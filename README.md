@@ -10,10 +10,10 @@ applied, the group is on.
 
 The cause sits one layer down, in Zigbee. A group or scene goes out as a
 **groupcast** -- a single message to every lamp at once, which no lamp
-acknowledges and which is therefore never resent. A bulb that is awkwardly placed
-or briefly busy misses it, and no error is raised anywhere. A command aimed at one lamp
-goes out as **unicast** instead: acknowledged, and resent by the Zigbee stack
-itself when that acknowledgement fails to arrive.
+acknowledges and which is therefore never resent. A bulb that is awkwardly
+placed or briefly busy misses it, and no error is raised anywhere. A command
+aimed at one lamp goes out as **unicast** instead: acknowledged, and resent by
+the Zigbee stack itself when that acknowledgement fails to arrive.
 
 Home Assistant cannot tell the two apart, because a group counts as "on" the
 moment one member lights up. So the room comes on halfway and stays that way
