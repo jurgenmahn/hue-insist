@@ -16,7 +16,9 @@
           "brightness_tolerance": "Brightness tolerance (0-255)",
           "mirek_tolerance": "Colour temperature tolerance (mired)",
           "skip_unavailable": "Skip unavailable lamps",
-          "unavailable_exceptions": "Correct anyway, even when they report unavailable"
+          "unavailable_exceptions": "Correct anyway, even when they report unavailable",
+          "command_rate": "Maximum commands per second",
+          "debug_log": "Verbose logging"
         }
       }
     },
@@ -40,7 +42,9 @@
           "brightness_tolerance": "Brightness tolerance (0-255)",
           "mirek_tolerance": "Colour temperature tolerance (mired)",
           "skip_unavailable": "Skip unavailable lamps",
-          "unavailable_exceptions": "Correct anyway, even when they report unavailable"
+          "unavailable_exceptions": "Correct anyway, even when they report unavailable",
+          "command_rate": "Maximum commands per second",
+          "debug_log": "Verbose logging"
         }
       }
     }

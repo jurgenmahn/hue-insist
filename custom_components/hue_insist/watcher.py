@@ -41,6 +41,10 @@ _LOGGER = logging.getLogger(__name__)
 
 UNKNOWN_STATES = (None, "unknown", "unavailable")
 
+# Above this the xy colours count as different. Roughly the point where the eye
+# starts to notice on a white wall.
+XY_TOLERANCE = 0.02
+
 
 @dataclass
 class Target:
@@ -98,6 +102,19 @@ class Target:
             data["color_temp_kelvin"] = self.kelvin
         return "turn_on", data
 
+    def __str__(self) -> str:
+        """Short form for the log."""
+        if not self.on:
+            return "off"
+        parts = ["on"]
+        if self.brightness is not None:
+            parts.append(f"bri {self.brightness}")
+        if self.xy is not None:
+            parts.append(f"xy {self.xy[0]:.3f},{self.xy[1]:.3f}")
+        elif self.kelvin is not None:
+            parts.append(f"{self.kelvin}K")
+        return " ".join(parts)
+
 
 @dataclass
 class Job:
@@ -133,9 +150,11 @@ class Watcher:
 
         kinds: set[str] = set()
         if domain == "light" and service in ("turn_on", "turn_off", "toggle"):
+            requested = self._entities_from(data.get("service_data", {}))
             targets = self._targets_for_light(service, data.get("service_data", {}), kinds)
             source = f"light.{service}"
         elif domain == "scene" and service == "turn_on" and self.options.watch_scenes:
+            requested = self._entities_from(data.get("service_data", {}))
             targets = self._targets_for_scene(data.get("service_data", {}))
             source = "scene.turn_on"
             if targets:
@@ -143,8 +162,15 @@ class Watcher:
         else:
             return
 
+        skipped = [e for e in targets if e in self.options.excluded]
         targets = {e: t for e, t in targets.items() if e not in self.options.excluded}
         if not targets:
+            _LOGGER.debug(
+                "Ignoring %s on %s -- nothing left to watch%s",
+                source,
+                ", ".join(requested) or "nothing",
+                f" ({len(skipped)} excluded)" if skipped else "",
+            )
             return
 
         self.stats.actions_total += 1
@@ -156,6 +182,16 @@ class Watcher:
         if "device" in kinds:
             self.stats.actions_device += 1
         self._publish()
+
+        _LOGGER.debug(
+            "Caught %s on %s [%s] -> %d lamp(s), target %s%s",
+            source,
+            ", ".join(requested) or "nothing",
+            "+".join(sorted(kinds)) or "unknown",
+            len(targets),
+            next(iter(targets.values())),
+            f", skipping {', '.join(skipped)}" if skipped else "",
+        )
 
         self.hass.async_create_task(
             self._verify(Job(targets=targets, source=source))
@@ -174,8 +210,10 @@ class Watcher:
             is_group = bool(members)
 
             if is_group and not self.options.watch_groups:
+                _LOGGER.debug("Skipping group %s -- groups are not watched", entity)
                 continue
             if not is_group and not self.options.watch_lights:
+                _LOGGER.debug("Skipping lamp %s -- single lamps are not watched", entity)
                 continue
             kinds.add("group" if is_group else "device")
 
@@ -188,6 +226,11 @@ class Watcher:
             else:
                 target = Target.from_service_data(service, data)
 
+            if is_group:
+                _LOGGER.debug(
+                    "%s expands to %d lamp(s): %s",
+                    entity, len(members), ", ".join(sorted(members)),
+                )
             for lamp in members or [entity]:
                 targets[lamp] = target
         return targets
@@ -195,7 +238,10 @@ class Watcher:
     def _targets_for_scene(self, data: dict[str, Any]) -> dict[str, Target]:
         targets: dict[str, Target] = {}
         for scene in self._entities_from(data):
-            for lamp, action in self.definitions.scene_targets(scene).items():
+            found = self.definitions.scene_targets(scene)
+            if not found:
+                _LOGGER.debug("Scene %s has no definition on the bridge", scene)
+            for lamp, action in found.items():
                 targets[lamp] = Target.from_hue_action(action)
         return targets
 
@@ -206,11 +252,13 @@ class Watcher:
             await asyncio.sleep(self.options.delay)
             job.attempt = attempt
 
-            deviating = {
-                lamp: target
-                for lamp, target in job.targets.items()
-                if self._deviates(lamp, target)
-            }
+            deviations = {}
+            for lamp, target in job.targets.items():
+                reason = self._deviation(lamp, target)
+                if reason:
+                    deviations[lamp] = reason
+            deviating = {lamp: job.targets[lamp] for lamp in deviations}
+
             if attempt == 1:
                 # Counted once per request, not once per round: a single
                 # stubborn lamp would otherwise dominate the totals.
@@ -219,14 +267,21 @@ class Watcher:
                 self._publish()
 
             if not deviating:
-                if attempt > 1:
-                    _LOGGER.debug("All correct after attempt %d", attempt)
+                _LOGGER.debug(
+                    "%s: all %d lamp(s) correct%s",
+                    job.source, len(job.targets),
+                    f" after attempt {attempt}" if attempt > 1 else "",
+                )
                 return
 
             _LOGGER.debug(
-                "Attempt %d: %d lamp(s) deviate: %s",
-                attempt, len(deviating), ", ".join(deviating),
+                "%s attempt %d/%d: %d of %d lamp(s) deviate",
+                job.source, attempt, self.options.retries,
+                len(deviating), len(job.targets),
             )
+            for lamp, reason in sorted(deviations.items()):
+                _LOGGER.debug("  %s: %s", lamp, reason)
+
             await self._correct(deviating)
 
             # Count each lamp once per request, not once per retry round. A lamp
@@ -248,8 +303,8 @@ class Watcher:
         # Lamps we cannot verify are excluded from the tally: reporting them as
         # failures every single time would drown out the real ones.
         remaining = [
-            l for l, t in job.targets.items()
-            if self._deviates(l, t) and not self._unverifiable(l)
+            lamp for lamp, target in job.targets.items()
+            if self._deviation(lamp, target) and not self._unverifiable(lamp)
         ]
         if remaining:
             self.stats.failures += len(remaining)
@@ -265,8 +320,13 @@ class Watcher:
                 {"entities": remaining, "attempts": self.options.retries, "source": job.source},
             )
 
-    def _deviates(self, lamp: str, target: Target) -> bool:
-        """Decide whether a lamp is not what was asked for."""
+    def _deviation(self, lamp: str, target: Target) -> str | None:
+        """Say how a lamp differs from what was asked, or None when it matches.
+
+        Returning the reason rather than a bare boolean is what makes the log
+        worth reading: "off, expected on" and "brightness 140, expected 254" are
+        different problems, and only the first is a missed command.
+        """
         state = self.hass.states.get(lamp)
         if state is None or state.state in UNKNOWN_STATES:
             # Unreachable lamps are normally left out: a bulb without power --
@@ -279,38 +339,51 @@ class Watcher:
             # reports unavailable, yet the command has to reach it. Those are
             # treated as deviating so a correction is sent, and they are left
             # out of the failure tally because there is nothing to verify.
-            return self._unverifiable(lamp) and target.on
+            if self._unverifiable(lamp) and target.on:
+                reported = state.state if state else "not in Home Assistant"
+                return f"{reported}, correcting blind (cannot be verified)"
+            return None
 
         actually_on = state.state == STATE_ON
         if actually_on != target.on:
-            return True
+            return f"{state.state}, expected {'on' if target.on else 'off'}"
         if not target.on:
-            return False
+            return None
 
         attrs = state.attributes
         if self.options.check_brightness and target.brightness is not None:
             now = attrs.get("brightness")
-            if now is None or abs(int(now) - target.brightness) > self.options.brightness_tolerance:
-                return True
+            if now is None:
+                return f"brightness unknown, expected {target.brightness}"
+            if abs(int(now) - target.brightness) > self.options.brightness_tolerance:
+                return f"brightness {int(now)}, expected {target.brightness}"
 
         if self.options.check_color:
             if target.xy is not None:
                 now = attrs.get("xy_color")
-                if now is None or max(
+                if now is None:
+                    return f"colour unknown, expected xy {target.xy[0]:.3f},{target.xy[1]:.3f}"
+                if max(
                     abs(now[0] - target.xy[0]), abs(now[1] - target.xy[1])
-                ) > 0.02:
-                    return True
+                ) > XY_TOLERANCE:
+                    return (
+                        f"xy {now[0]:.3f},{now[1]:.3f}, "
+                        f"expected {target.xy[0]:.3f},{target.xy[1]:.3f}"
+                    )
             elif target.kelvin is not None:
                 now = attrs.get("color_temp_kelvin")
                 if now is None:
-                    return True
+                    return f"colour temperature unknown, expected {target.kelvin}K"
                 # Compare in mired: equal steps there are visually equal, in
                 # kelvin they are not. 100K at 2000K is obvious, at 6000K it is
                 # imperceptible.
                 difference = abs(1_000_000 / int(now) - 1_000_000 / target.kelvin)
                 if difference > self.options.mirek_tolerance:
-                    return True
-        return False
+                    return (
+                        f"{int(now)}K, expected {target.kelvin}K "
+                        f"({difference:.0f} mired off)"
+                    )
+        return None
 
     @callback
     def _publish(self) -> None:
@@ -324,19 +397,39 @@ class Watcher:
         return lamp in self.options.unavailable_exceptions
 
     async def _correct(self, deviating: dict[str, Target]) -> None:
-        """Address each lamp on its own.
+        """Address each lamp on its own, paced to what the bridge can take.
 
         One at a time rather than as a group: a unicast command is acknowledged
         by the Zigbee stack and retried when needed, a groupcast is not. That
         difference is the entire point of this integration.
+
+        The pacing matters just as much. The Hue bridge handles roughly ten light
+        commands per second and silently drops whatever arrives on top of that --
+        no error, no retry. Firing thirty corrections at once therefore repairs
+        almost nothing and makes the congestion worse; spreading them out repairs
+        all thirty, only slower.
         """
-        for lamp, target in deviating.items():
+        interval = 1 / self.options.command_rate if self.options.command_rate else 0
+        started = self.hass.loop.time()
+
+        for index, (lamp, target) in enumerate(deviating.items()):
+            if index and interval:
+                await asyncio.sleep(interval)
             service, data = target.to_service_data()
             context = Context()
             self._own_contexts.add(context.id)
             if len(self._own_contexts) > 500:
                 self._own_contexts = set(list(self._own_contexts)[-250:])
+            _LOGGER.debug("  -> light.%s %s (%s)", service, lamp, target)
             await self.hass.services.async_call(
                 "light", service, {ATTR_ENTITY_ID: lamp, **data},
                 blocking=False, context=context,
+            )
+
+        spent = self.hass.loop.time() - started
+        if spent > self.options.delay:
+            _LOGGER.debug(
+                "Correcting %d lamp(s) took %.1fs at %d/s, longer than the %.1fs "
+                "delay; the next check simply shifts along",
+                len(deviating), spent, self.options.command_rate, self.options.delay,
             )

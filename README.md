@@ -25,8 +25,9 @@ case for 55 minutes straight.
    straight from the definition on the Hue bridge, so brightness and colour are
    included, not just on/off.
 3. **Verifies** after a configurable pause what actually happened.
-4. **Corrects** each deviating lamp *individually*. That is the whole point: a
-   single-target command does get acknowledged.
+4. **Corrects** each deviating lamp *individually*, paced to what the bridge can
+   take. Individual is the whole point: a single-target command does get
+   acknowledged. The pacing matters too -- see below.
 5. **Reports** what could not be fixed after all attempts, and keeps count of how
    often it had to step in.
 
@@ -61,6 +62,43 @@ Home Assistant configuration and restart.
 | Correct anyway | empty | Exceptions to the line above |
 | Brightness tolerance | 8 | On a 0-255 scale, a little over 3% |
 | Colour temperature tolerance | 15 mired | Smaller differences are not visible |
+| Maximum commands per second | 10 | How fast corrections are sent to the bridge |
+| Verbose logging | off | A line per request, per deviating lamp and per correction |
+
+### Why the commands are paced
+
+The Hue bridge handles roughly ten light commands per second and silently drops
+whatever arrives on top of that -- no error, no retry, nothing in the log. Firing
+thirty corrections at once therefore repairs almost nothing and adds to the
+congestion that caused the problem.
+
+Measured: thirty lamps take about three seconds to correct at the default rate.
+That is longer than the two-second verification delay, which is fine -- the next
+check simply shifts along. Raise the rate if your bridge keeps up; lower it if
+corrections still go missing.
+
+### Verbose logging
+
+The switch sets the log level for this integration on the fly, so there is no
+need to edit `configuration.yaml` or restart. Turning it off restores whatever
+level was configured before.
+
+What it writes, per request:
+
+```
+Caught light.turn_on on light.kitchen [group] -> 6 lamp(s), target on bri 254 2700K
+light.kitchen expands to 6 lamp(s): light.spot_1, light.spot_2, ...
+light.turn_on attempt 1/3: 2 of 6 lamp(s) deviate
+  light.spot_3: off, expected on
+  light.spot_4: brightness 140, expected 254
+  -> light.turn_on light.spot_3 (on bri 254 2700K)
+  -> light.turn_on light.spot_4 (on bri 254 2700K)
+light.turn_on: all 6 lamp(s) correct after attempt 2
+```
+
+The reason per lamp is the useful part. "off, expected on" is a missed command;
+"brightness 140, expected 254" is a lamp that got the message but landed
+somewhere else. Only the first is the problem this integration was built for.
 
 ## Entities
 

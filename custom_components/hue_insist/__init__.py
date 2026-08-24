@@ -25,8 +25,10 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
     CONF_BRIGHTNESS_TOLERANCE,
+    CONF_COMMAND_RATE,
     CONF_CHECK_BRIGHTNESS,
     CONF_CHECK_COLOR,
+    CONF_DEBUG_LOG,
     CONF_DELAY,
     CONF_EXCLUDED,
     CONF_MIREK_TOLERANCE,
@@ -37,6 +39,8 @@ from .const import (
     CONF_WATCH_LIGHTS,
     CONF_WATCH_SCENES,
     DEFAULT_BRIGHTNESS_TOLERANCE,
+    DEFAULT_COMMAND_RATE,
+    DEFAULT_DEBUG_LOG,
     DEFAULT_DELAY,
     DEFAULT_MIREK_TOLERANCE,
     DEFAULT_RETRIES,
@@ -48,6 +52,21 @@ from .watcher import Watcher
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR]
+
+# Whatever level was configured before we touched it -- through the logger
+# integration, say. Turning the option off restores that rather than imposing a
+# level of our own on a deliberate setting.
+_PACKAGE_LOGGER = logging.getLogger(__package__)
+_CONFIGURED_LEVEL = _PACKAGE_LOGGER.level
+
+
+def _apply_log_level(debug: bool) -> None:
+    """Switch verbose logging on or off without editing configuration.yaml.
+
+    Setting the level on our own logger is enough: Home Assistant's handlers sit
+    on the root logger at NOTSET, so they pass on whatever reaches them.
+    """
+    _PACKAGE_LOGGER.setLevel(logging.DEBUG if debug else _CONFIGURED_LEVEL)
 
 # The bridge is re-read periodically so a new or changed scene is picked up
 # without needing a restart.
@@ -68,6 +87,8 @@ class Options:
     mirek_tolerance: int
     skip_unavailable: bool
     unavailable_exceptions: set[str]
+    command_rate: int
+    debug_log: bool
 
     @classmethod
     def from_entry(cls, entry: ConfigEntry) -> "Options":
@@ -85,6 +106,8 @@ class Options:
             mirek_tolerance=int(o.get(CONF_MIREK_TOLERANCE, DEFAULT_MIREK_TOLERANCE)),
             skip_unavailable=bool(o.get(CONF_SKIP_UNAVAILABLE, DEFAULT_SKIP_UNAVAILABLE)),
             unavailable_exceptions=set(o.get(CONF_UNAVAILABLE_EXCEPTIONS, [])),
+            command_rate=int(o.get(CONF_COMMAND_RATE, DEFAULT_COMMAND_RATE)),
+            debug_log=bool(o.get(CONF_DEBUG_LOG, DEFAULT_DEBUG_LOG)),
         )
 
 
@@ -92,7 +115,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     definitions = HueDefinitions(hass)
     await definitions.async_refresh()
 
-    watcher = Watcher(hass, definitions, Options.from_entry(entry))
+    options = Options.from_entry(entry)
+    _apply_log_level(options.debug_log)
+
+    watcher = Watcher(hass, definitions, options)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = watcher
 
     entry.async_on_unload(
@@ -109,10 +135,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _LOGGER.info(
-        "Hue Insist active: %d attempts, %.1fs delay, bridge %s",
+        "Hue Insist active: %d attempts, %.1fs delay, max %d command(s)/s, "
+        "bridge %s, verbose logging %s",
         watcher.options.retries,
         watcher.options.delay,
+        watcher.options.command_rate,
         "reachable" if definitions.available else "unreachable",
+        "on" if watcher.options.debug_log else "off",
     )
     return True
 
@@ -121,6 +150,7 @@ async def _options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Apply new options immediately, without a restart."""
     watcher: Watcher = hass.data[DOMAIN][entry.entry_id]
     watcher.options = Options.from_entry(entry)
+    _apply_log_level(watcher.options.debug_log)
     await watcher.definitions.async_refresh()
 
 

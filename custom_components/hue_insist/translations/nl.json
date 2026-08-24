@@ -16,7 +16,9 @@
           "brightness_tolerance": "Tolerantie helderheid (0-255)",
           "mirek_tolerance": "Tolerantie kleurtemperatuur (mired)",
           "skip_unavailable": "Onbereikbare lampen overslaan",
-          "unavailable_exceptions": "Toch corrigeren, ook als ze onbereikbaar melden"
+          "unavailable_exceptions": "Toch corrigeren, ook als ze onbereikbaar melden",
+          "command_rate": "Maximaal aantal commando's per seconde",
+          "debug_log": "Uitgebreide logging"
         }
       }
     },
@@ -40,7 +42,9 @@
           "brightness_tolerance": "Tolerantie helderheid (0-255)",
           "mirek_tolerance": "Tolerantie kleurtemperatuur (mired)",
           "skip_unavailable": "Onbereikbare lampen overslaan",
-          "unavailable_exceptions": "Toch corrigeren, ook als ze onbereikbaar melden"
+          "unavailable_exceptions": "Toch corrigeren, ook als ze onbereikbaar melden",
+          "command_rate": "Maximaal aantal commando's per seconde",
+          "debug_log": "Uitgebreide logging"
         }
       }
     }

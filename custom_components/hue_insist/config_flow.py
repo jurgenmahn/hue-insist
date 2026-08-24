@@ -16,8 +16,10 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_BRIGHTNESS_TOLERANCE,
+    CONF_COMMAND_RATE,
     CONF_CHECK_BRIGHTNESS,
     CONF_CHECK_COLOR,
+    CONF_DEBUG_LOG,
     CONF_DELAY,
     CONF_EXCLUDED,
     CONF_MIREK_TOLERANCE,
@@ -28,6 +30,8 @@ from .const import (
     CONF_WATCH_LIGHTS,
     CONF_WATCH_SCENES,
     DEFAULT_BRIGHTNESS_TOLERANCE,
+    DEFAULT_COMMAND_RATE,
+    DEFAULT_DEBUG_LOG,
     DEFAULT_DELAY,
     DEFAULT_MIREK_TOLERANCE,
     DEFAULT_RETRIES,
@@ -76,6 +80,14 @@ def _schema(current: dict[str, Any]) -> vol.Schema:
                 selector.NumberSelector(
                     selector.NumberSelectorConfig(min=0, max=64, step=1,
                                                   mode=selector.NumberSelectorMode.SLIDER)),
+            vol.Required(CONF_COMMAND_RATE,
+                         default=h(CONF_COMMAND_RATE, DEFAULT_COMMAND_RATE)):
+                selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=1, max=50, step=1,
+                                                  unit_of_measurement="/s",
+                                                  mode=selector.NumberSelectorMode.SLIDER)),
+            vol.Required(CONF_DEBUG_LOG, default=h(CONF_DEBUG_LOG, DEFAULT_DEBUG_LOG)):
+                selector.BooleanSelector(),
             vol.Required(CONF_MIREK_TOLERANCE,
                          default=h(CONF_MIREK_TOLERANCE, DEFAULT_MIREK_TOLERANCE)):
                 selector.NumberSelector(
