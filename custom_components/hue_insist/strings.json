@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Hue Insist",
+        "description": "Controleert of lichtcommando's werkelijk uitgevoerd zijn en herstelt lampen die het commando gemist hebben. De standaardwaarden werken zonder aanpassing.",
+        "data": {
+          "retries": "Aantal pogingen",
+          "delay": "Wachttijd voor de controle",
+          "watch_lights": "Losse lampen bewaken",
+          "watch_groups": "Groepen en kamers bewaken",
+          "watch_scenes": "Scenes bewaken",
+          "check_brightness": "Ook helderheid controleren",
+          "check_color": "Ook kleur controleren",
+          "excluded_entities": "Lampen die je wilt overslaan",
+          "brightness_tolerance": "Tolerantie helderheid (0-255)",
+          "mirek_tolerance": "Tolerantie kleurtemperatuur (mired)"
+        }
+      }
+    },
+    "abort": { "already_configured": "Hue Insist is al ingesteld." }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hue Insist",
+        "data": {
+          "retries": "Aantal pogingen",
+          "delay": "Wachttijd voor de controle",
+          "watch_lights": "Losse lampen bewaken",
+          "watch_groups": "Groepen en kamers bewaken",
+          "watch_scenes": "Scenes bewaken",
+          "check_brightness": "Ook helderheid controleren",
+          "check_color": "Ook kleur controleren",
+          "excluded_entities": "Lampen die je wilt overslaan",
+          "brightness_tolerance": "Tolerantie helderheid (0-255)",
+          "mirek_tolerance": "Tolerantie kleurtemperatuur (mired)"
+        }
+      }
+    }
+  }
+}

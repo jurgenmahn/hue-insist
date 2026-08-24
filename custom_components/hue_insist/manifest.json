@@ -1,0 +1,14 @@
+{
+  "domain": "hue_insist",
+  "name": "Hue Insist",
+  "version": "0.1.0",
+  "documentation": "https://github.com/jurgenmahn/hue-insist",
+  "issue_tracker": "https://github.com/jurgenmahn/hue-insist/issues",
+  "codeowners": ["@jurgenmahn"],
+  "config_flow": true,
+  "dependencies": ["light"],
+  "after_dependencies": ["hue"],
+  "iot_class": "local_push",
+  "integration_type": "service",
+  "requirements": []
+}
