@@ -1,9 +1,9 @@
-"""Diagnostiek: hoe vaak moest Hue Insist ingrijpen, en waar.
+"""Diagnostics: how often did Hue Insist have to step in, and where.
 
-Dit is de reden dat de integratie meer is dan een reparatie. Nu is er geen enkel
-zicht op hoe vaak een lamp een commando mist -- het vermoeden bestaat, de cijfers
-niet. Deze sensoren maken het meetbaar, zodat je kunt zien of een lamp structureel
-slecht bereik heeft of dat het incidenteel is.
+This is what makes the integration more than a repair job. Right now there is no
+visibility at all into how often a lamp misses a command -- the suspicion exists,
+the numbers do not. These sensors make it measurable, so you can tell whether a
+lamp has structurally poor range or whether it is incidental.
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ from .const import DOMAIN, EVENT_CORRECTED, EVENT_FAILED
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
                             add: AddEntitiesCallback) -> None:
     watcher = hass.data[DOMAIN][entry.entry_id]
-    add([CorrectieSensor(entry, watcher), MislukkingSensor(entry, watcher),
-         LaatsteFoutSensor(entry, watcher)])
+    add([CorrectionsSensor(entry, watcher), FailuresSensor(entry, watcher),
+         LastFailureSensor(entry, watcher)])
 
 
-class _Basis(SensorEntity):
+class _Base(SensorEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -40,48 +40,48 @@ class _Basis(SensorEntity):
         }
 
     async def async_added_to_hass(self) -> None:
-        for gebeurtenis in (EVENT_CORRECTED, EVENT_FAILED):
+        for event_type in (EVENT_CORRECTED, EVENT_FAILED):
             self.async_on_remove(
-                self.hass.bus.async_listen(gebeurtenis, lambda _e: self.async_write_ha_state())
+                self.hass.bus.async_listen(event_type, lambda _e: self.async_write_ha_state())
             )
 
 
-class CorrectieSensor(_Basis):
-    _attr_name = "Correcties"
+class CorrectionsSensor(_Base):
+    _attr_name = "Corrections"
     _attr_icon = "mdi:auto-fix"
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_correcties"
+        return f"{self._entry.entry_id}_corrections"
 
     @property
     def native_value(self) -> int:
-        return self._watcher.correcties
+        return self._watcher.corrections
 
 
-class MislukkingSensor(_Basis):
-    _attr_name = "Mislukt"
+class FailuresSensor(_Base):
+    _attr_name = "Failures"
     _attr_icon = "mdi:lightbulb-alert"
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_mislukt"
+        return f"{self._entry.entry_id}_failures"
 
     @property
     def native_value(self) -> int:
-        return self._watcher.mislukkingen
+        return self._watcher.failures
 
 
-class LaatsteFoutSensor(_Basis):
-    _attr_name = "Laatste mislukking"
+class LastFailureSensor(_Base):
+    _attr_name = "Last failure"
     _attr_icon = "mdi:alert-circle-outline"
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_laatste_fout"
+        return f"{self._entry.entry_id}_last_failure"
 
     @property
     def native_value(self) -> str:
-        return (self._watcher.laatste_fout or "geen")[:255]
+        return (self._watcher.last_failure or "none")[:255]

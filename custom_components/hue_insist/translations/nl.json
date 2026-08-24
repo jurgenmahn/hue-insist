@@ -14,11 +14,15 @@
           "check_color": "Ook kleur controleren",
           "excluded_entities": "Lampen die je wilt overslaan",
           "brightness_tolerance": "Tolerantie helderheid (0-255)",
-          "mirek_tolerance": "Tolerantie kleurtemperatuur (mired)"
+          "mirek_tolerance": "Tolerantie kleurtemperatuur (mired)",
+          "skip_unavailable": "Onbereikbare lampen overslaan",
+          "unavailable_exceptions": "Toch corrigeren, ook als ze onbereikbaar melden"
         }
       }
     },
-    "abort": { "already_configured": "Hue Insist is al ingesteld." }
+    "abort": {
+      "already_configured": "Hue Insist is al ingesteld."
+    }
   },
   "options": {
     "step": {
@@ -34,7 +38,9 @@
           "check_color": "Ook kleur controleren",
           "excluded_entities": "Lampen die je wilt overslaan",
           "brightness_tolerance": "Tolerantie helderheid (0-255)",
-          "mirek_tolerance": "Tolerantie kleurtemperatuur (mired)"
+          "mirek_tolerance": "Tolerantie kleurtemperatuur (mired)",
+          "skip_unavailable": "Onbereikbare lampen overslaan",
+          "unavailable_exceptions": "Toch corrigeren, ook als ze onbereikbaar melden"
         }
       }
     }

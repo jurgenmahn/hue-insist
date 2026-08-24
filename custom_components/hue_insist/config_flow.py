@@ -1,8 +1,8 @@
-"""Config flow voor Hue Insist.
+"""Config flow for Hue Insist.
 
-De integratie moet zonder configuratie werken: aanzetten is genoeg. Alles wat
-hier instelbaar is heeft een verdedigbare standaardwaarde, en de opties zijn er
-voor het afstellen achteraf -- niet als drempel vooraf.
+The integration has to work without configuration: switching it on is enough.
+Everything adjustable here has a defensible default, and the options exist for
+tuning afterwards -- not as a hurdle up front.
 """
 
 from __future__ import annotations
@@ -22,6 +22,8 @@ from .const import (
     CONF_EXCLUDED,
     CONF_MIREK_TOLERANCE,
     CONF_RETRIES,
+    CONF_SKIP_UNAVAILABLE,
+    CONF_UNAVAILABLE_EXCEPTIONS,
     CONF_WATCH_GROUPS,
     CONF_WATCH_LIGHTS,
     CONF_WATCH_SCENES,
@@ -29,13 +31,14 @@ from .const import (
     DEFAULT_DELAY,
     DEFAULT_MIREK_TOLERANCE,
     DEFAULT_RETRIES,
+    DEFAULT_SKIP_UNAVAILABLE,
     DOMAIN,
 )
 
 
-def _schema(huidig: dict[str, Any]) -> vol.Schema:
-    def h(sleutel, standaard):
-        return huidig.get(sleutel, standaard)
+def _schema(current: dict[str, Any]) -> vol.Schema:
+    def h(key, default):
+        return current.get(key, default)
 
     return vol.Schema(
         {
@@ -58,6 +61,13 @@ def _schema(huidig: dict[str, Any]) -> vol.Schema:
                 selector.BooleanSelector(),
             vol.Required(CONF_CHECK_COLOR, default=h(CONF_CHECK_COLOR, True)):
                 selector.BooleanSelector(),
+            vol.Required(CONF_SKIP_UNAVAILABLE,
+                         default=h(CONF_SKIP_UNAVAILABLE, DEFAULT_SKIP_UNAVAILABLE)):
+                selector.BooleanSelector(),
+            vol.Optional(CONF_UNAVAILABLE_EXCEPTIONS,
+                         default=h(CONF_UNAVAILABLE_EXCEPTIONS, [])):
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="light", multiple=True)),
             vol.Optional(CONF_EXCLUDED, default=h(CONF_EXCLUDED, [])):
                 selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="light", multiple=True)),
@@ -76,7 +86,7 @@ def _schema(huidig: dict[str, Any]) -> vol.Schema:
 
 
 class HueInsistConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Eenmalige installatie. Er is geen tweede exemplaar nodig."""
+    """One-off setup. A second instance serves no purpose."""
 
     VERSION = 1
 

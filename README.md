@@ -1,112 +1,119 @@
 # Hue Insist
 
-Zorgt dat een lichtcommando ook echt uitgevoerd wordt.
+Makes sure a light command is actually carried out.
 
-## Het probleem
+## The problem
 
-Een Hue-groep of scene gaat als Zigbee **groupcast** de lucht in. Groupcast wordt
-niet per lamp bevestigd en dus ook niet herhaald: een lamp met matig bereik mist
-het bericht definitief. Individuele lampcommando's gaan als unicast, met
-bevestiging en met herhaling door de Zigbee-stack zelf.
+A Hue group or scene is sent over Zigbee as a **groupcast**. Groupcast is not
+acknowledged per lamp and is therefore never retried: a bulb with marginal range
+misses the message for good. Individual light commands are sent as unicast, which
+*is* acknowledged and which the Zigbee stack retries on its own.
 
-Home Assistant merkt daar niets van, want een groep telt al als "aan" zodra één
-van de leden brandt. Het gevolg is een kamer die half aangaat, zonder foutmelding
-en zonder dat er iets is dat het corrigeert.
+Home Assistant never notices, because a group already counts as "on" the moment a
+single member lights up. The result is a room that comes on halfway, with no error
+and nothing to correct it.
 
-Gemeten in een huishouden met 34 Hue-lampen: één ledstrip stond meerdere keren
-per avond tientallen minuten donker terwijl zijn groep gewoon op `on` stond. In
-één geval 55 minuten.
+Measured in a household with 34 Hue lights: one LED strip sat dark for tens of
+minutes several times an evening while its group happily reported `on`. In one
+case for 55 minutes straight.
 
-## Wat deze integratie doet
+## What this integration does
 
-1. **Vangt** elk lichtverzoek dat via Home Assistant loopt — automations,
-   dashboards, HomeKit, Siri, spraakassistenten.
-2. **Vertaalt** het naar een concrete gewenste eindstand per lamp. Voor scenes
-   komt die rechtstreeks uit de definitie op de Hue-bridge, dus inclusief
-   helderheid en kleur, niet alleen aan of uit.
-3. **Controleert** na een instelbare pauze wat er werkelijk gebeurd is.
-4. **Corrigeert** elke afwijkende lamp *afzonderlijk*. Dat is de kern: een los
-   commando wordt wél bevestigd.
-5. **Meldt** wat na alle pogingen niet gelukt is, en houdt bij hoe vaak er
-   ingegrepen moest worden.
+1. **Catches** every light request that passes through Home Assistant —
+   automations, dashboards, HomeKit, Siri, voice assistants.
+2. **Translates** it into a concrete target state per lamp. For scenes that comes
+   straight from the definition on the Hue bridge, so brightness and colour are
+   included, not just on/off.
+3. **Verifies** after a configurable pause what actually happened.
+4. **Corrects** each deviating lamp *individually*. That is the whole point: a
+   single-target command does get acknowledged.
+5. **Reports** what could not be fixed after all attempts, and keeps count of how
+   often it had to step in.
 
-Werkt zonder configuratie. Alle instellingen hebben een verdedigbare
-standaardwaarde.
+Works without any configuration. Every setting has a defensible default.
 
-## Installatie
+## Installation
 
-### Via HACS
+### Through HACS
 
-Voeg deze repository toe als custom repository (categorie: Integration),
-installeer Hue Insist, herstart Home Assistant en voeg de integratie toe via
-**Instellingen → Apparaten en diensten → Integratie toevoegen**.
+Add this repository as a custom repository (category: Integration), install Hue
+Insist, restart Home Assistant, then add the integration under
+**Settings → Devices & Services → Add Integration**.
 
-### Handmatig
+### Manually
 
-Kopieer `custom_components/hue_insist` naar de `custom_components`-map van je
-Home Assistant-configuratie en herstart.
+Copy `custom_components/hue_insist` into the `custom_components` folder of your
+Home Assistant configuration and restart.
 
-## Instellingen
+## Options
 
-| Instelling | Standaard | Toelichting |
+| Option | Default | Notes |
 |---|---|---|
-| Aantal pogingen | 3 | Hoe vaak een afwijkende lamp opnieuw geprobeerd wordt |
-| Wachttijd | 2 s | Pauze voor de controle, en tussen pogingen |
-| Losse lampen bewaken | aan | Verzoeken aan een enkele lamp |
-| Groepen en kamers bewaken | aan | Verzoeken aan een Hue room of zone |
-| Scenes bewaken | aan | Verzoeken aan een scene |
-| Ook helderheid controleren | aan | Niet alleen aan/uit, maar ook de dimstand |
-| Ook kleur controleren | aan | Kleurtemperatuur en xy-kleur |
-| Lampen overslaan | leeg | Lampen die je met rust wilt laten |
-| Tolerantie helderheid | 8 | Op een schaal van 0-255, ruim 3% |
-| Tolerantie kleurtemperatuur | 15 mired | Kleinere afwijkingen zijn niet zichtbaar |
+| Number of attempts | 3 | How often a deviating lamp is retried |
+| Delay | 2 s | Pause before verifying, and between attempts |
+| Watch individual lights | on | Requests aimed at a single lamp |
+| Watch groups and rooms | on | Requests aimed at a Hue room or zone |
+| Watch scenes | on | Requests aimed at a scene |
+| Verify brightness | on | Not just on/off, but the dim level too |
+| Verify colour | on | Colour temperature and xy colour |
+| Excluded lights | empty | Lamps you want left alone |
+| Skip unavailable lamps | on | Lamps reporting `unavailable` are not verified |
+| Correct anyway | empty | Exceptions to the line above |
+| Brightness tolerance | 8 | On a 0-255 scale, a little over 3% |
+| Colour temperature tolerance | 15 mired | Smaller differences are not visible |
 
-## Entiteiten
+## Entities
 
-| Entiteit | Betekenis |
+| Entity | Meaning |
 |---|---|
-| `sensor.hue_insist_correcties` | Hoe vaak een lamp bijgestuurd moest worden |
-| `sensor.hue_insist_mislukt` | Hoe vaak dat na alle pogingen niet lukte |
-| `sensor.hue_insist_laatste_mislukking` | Welke lamp het laatst niet reageerde |
+| `sensor.hue_insist_corrections` | How often a lamp had to be nudged |
+| `sensor.hue_insist_failures` | How often that did not work after all attempts |
+| `sensor.hue_insist_last_failure` | Which lamp last refused to respond |
 
-Die eerste sensor is meer dan een teller: hij maakt zichtbaar welke lamp
-structureel slecht bereik heeft. Dat is informatie die je anders niet hebt.
+That first sensor is more than a counter: it shows which lamp has structurally
+poor range. That is information you otherwise simply do not have.
 
 ## Events
 
-| Event | Wanneer |
+| Event | Fired when |
 |---|---|
-| `hue_insist_corrected` | Een lamp is bijgestuurd |
-| `hue_insist_failed` | Een lamp reageerde na alle pogingen niet |
+| `hue_insist_corrected` | A lamp was nudged |
+| `hue_insist_failed` | A lamp did not respond after all attempts |
 
-Beide dragen `entities` en `source` mee, zodat je er een melding aan kunt hangen.
+Both carry `entities` and `source`, so you can hang a notification off them.
 
-## Hoe het aan de Hue-bridge komt
+## How it reaches the Hue bridge
 
-De integratie hergebruikt de gegevens van de bestaande Hue-integratie in Home
-Assistant. Er is geen tweede koppeling nodig en je hoeft niet opnieuw op de knop
-te drukken.
+The integration reuses the credentials of the existing Hue integration in Home
+Assistant. No second pairing, no pressing the button again.
 
-De vertaling tussen bridge en Home Assistant is exact: de Hue-integratie gebruikt
-de resource-id van de bridge rechtstreeks als `unique_id` van de entiteit, dus een
-opzoeking in het entiteitenregister is genoeg. Groepen lopen via
-`room.children` → device → light-service, want een room verwijst naar apparaten
-en niet naar lampen.
+The mapping between bridge and Home Assistant is exact: the Hue integration uses
+the bridge resource id directly as the entity's `unique_id`, so a lookup in the
+entity registry is enough. Groups go through `room.children` → device → light
+service, because a room points at devices rather than at lights.
 
-Zonder Hue-bridge werkt de integratie ook: dan valt de groepsuitklapping terug op
-het `entity_id`-attribuut dat Home Assistant zelf op groepsentiteiten zet, en
-worden scenes niet uitgeklapt.
+Without a Hue bridge the integration still works: group expansion falls back to
+the `entity_id` attribute Home Assistant puts on group entities itself, and scenes
+are not expanded.
 
-## Wat er buiten valt
+## What it cannot see
 
-**Bediening rechtstreeks in de Hue-app.** Die loopt niet langs Home Assistant en
-is dus onzichtbaar. Alles wat via Home Assistant gaat — inclusief HomeKit en
-Siri, mits die via de Home Assistant-bridge lopen — wordt wel gezien.
+**Control straight from the Hue app.** That never passes through Home Assistant
+and is therefore invisible. Everything that does go through Home Assistant —
+including HomeKit and Siri, as long as they run through the Home Assistant
+bridge — is covered.
 
-**Onbereikbare lampen.** Een lamp die `unavailable` is wordt overgeslagen en telt
-niet als fout. Een lamp achter een deurschakelaar zou anders elke ronde opnieuw
-geprobeerd worden en altijd mislukken.
+**Unavailable lamps**, by default. A lamp reporting `unavailable` is skipped and
+does not count as a failure -- a bulb behind a door switch would otherwise be
+retried every round and fail every time.
 
-## Licentie
+That default can be turned off globally, and there is a per-lamp exception list
+for the cases where it gets in the way. The case this was built for: a Hue lamp
+that no longer physically exists but is kept around as a proxy, its state read to
+drive non-Hue hardware. Such a lamp reports `unavailable` while the command still
+has to reach it. Lamps on the exception list are corrected blindly and are left
+out of the failure tally, because there is nothing to verify against.
+
+## Licence
 
 MIT

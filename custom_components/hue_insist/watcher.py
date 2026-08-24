@@ -1,18 +1,18 @@
-"""Vangt lichtcommando's op, controleert het resultaat en herstelt wat misging.
+"""Catches light commands, verifies the outcome and repairs what went wrong.
 
-Het probleem dat dit oplost: een Hue-groep of scene wordt door de bridge als
-Zigbee groupcast verstuurd. Groupcast kent geen bevestiging per lamp en dus ook
-geen herhaling op Zigbee-niveau. Een lamp met matig bereik mist het bericht
-definitief, en niemand merkt het -- Home Assistant toont de groep als aan zodra
-een van de leden brandt.
+The problem this solves: a Hue group or scene is sent by the bridge as a Zigbee
+groupcast. Groupcast is not acknowledged per lamp and is therefore never retried
+at the Zigbee level. A bulb with marginal range misses the message for good, and
+nobody notices -- Home Assistant reports the group as on the moment one of its
+members lights up.
 
-De aanpak: elk verzoek dat via Home Assistant loopt wordt gevangen, vertaald naar
-een concrete gewenste eindstand per lamp, en na een korte pauze geverifieerd. Wat
-niet klopt wordt per lamp afzonderlijk gecorrigeerd -- unicast, dus mét
-bevestiging en met herhaling door de Zigbee-stack zelf.
+The approach: every request that passes through Home Assistant is caught,
+translated into a concrete target state per lamp, and verified after a short
+pause. Whatever does not match is corrected lamp by lamp -- unicast, so with
+acknowledgement and with retries by the Zigbee stack itself.
 
-Wat hier bewust buiten valt: bediening rechtstreeks in de Hue-app. Die loopt niet
-langs Home Assistant en is dus onzichtbaar.
+Deliberately out of scope: control straight from the Hue app. That never passes
+through Home Assistant and is therefore invisible.
 """
 
 from __future__ import annotations
@@ -22,11 +22,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from homeassistant.const import ATTR_ENTITY_ID, STATE_ON, STATE_OFF
+from homeassistant.const import ATTR_ENTITY_ID, STATE_ON
 from homeassistant.core import Context, Event, HomeAssistant, callback
 
 from .const import (
-    DOMAIN,
     EVENT_CORRECTED,
     EVENT_FAILED,
     HA_BRIGHTNESS_MAX,
@@ -36,55 +35,55 @@ from .hue_api import HueDefinitions
 
 _LOGGER = logging.getLogger(__name__)
 
-ONBEKEND = (None, "unknown", "unavailable")
+UNKNOWN_STATES = (None, "unknown", "unavailable")
 
 
 @dataclass
-class Doel:
-    """De gewenste eindstand van een enkele lamp."""
+class Target:
+    """The intended end state of a single lamp."""
 
-    aan: bool
-    brightness: int | None = None      # 0-255, zoals Home Assistant hem kent
+    on: bool
+    brightness: int | None = None      # 0-255, the way Home Assistant reports it
     kelvin: int | None = None
     xy: tuple[float, float] | None = None
 
     @classmethod
-    def van_hue_actie(cls, actie: dict[str, Any]) -> "Doel":
-        """Vertaal een scene-actie van de bridge naar een doelstand."""
-        aan = bool(actie.get("on", {}).get("on", True))
-        helderheid = None
-        if "dimming" in actie:
-            pct = float(actie["dimming"].get("brightness", 0))
-            helderheid = round(pct / HUE_BRIGHTNESS_MAX * HA_BRIGHTNESS_MAX)
+    def from_hue_action(cls, action: dict[str, Any]) -> "Target":
+        """Translate a scene action from the bridge into a target state."""
+        on = bool(action.get("on", {}).get("on", True))
+        brightness = None
+        if "dimming" in action:
+            pct = float(action["dimming"].get("brightness", 0))
+            brightness = round(pct / HUE_BRIGHTNESS_MAX * HA_BRIGHTNESS_MAX)
         kelvin = None
-        if "color_temperature" in actie:
-            mirek = actie["color_temperature"].get("mirek")
+        if "color_temperature" in action:
+            mirek = action["color_temperature"].get("mirek")
             if mirek:
                 kelvin = round(1_000_000 / int(mirek))
         xy = None
-        if "color" in actie and "xy" in actie["color"]:
-            punt = actie["color"]["xy"]
-            xy = (float(punt["x"]), float(punt["y"]))
-        return cls(aan=aan, brightness=helderheid, kelvin=kelvin, xy=xy)
+        if "color" in action and "xy" in action["color"]:
+            point = action["color"]["xy"]
+            xy = (float(point["x"]), float(point["y"]))
+        return cls(on=on, brightness=brightness, kelvin=kelvin, xy=xy)
 
     @classmethod
-    def van_service_data(cls, service: str, data: dict[str, Any]) -> "Doel":
-        """Vertaal een light.turn_on/turn_off aanroep naar een doelstand."""
+    def from_service_data(cls, service: str, data: dict[str, Any]) -> "Target":
+        """Translate a light.turn_on/turn_off call into a target state."""
         if service == "turn_off":
-            return cls(aan=False)
+            return cls(on=False)
 
-        helderheid = data.get("brightness")
-        if helderheid is None and "brightness_pct" in data:
-            helderheid = round(float(data["brightness_pct"]) / 100 * HA_BRIGHTNESS_MAX)
+        brightness = data.get("brightness")
+        if brightness is None and "brightness_pct" in data:
+            brightness = round(float(data["brightness_pct"]) / 100 * HA_BRIGHTNESS_MAX)
         kelvin = data.get("color_temp_kelvin")
         if kelvin is None and data.get("color_temp"):
             kelvin = round(1_000_000 / int(data["color_temp"]))
         xy = tuple(data["xy_color"]) if data.get("xy_color") else None
-        return cls(aan=True, brightness=helderheid, kelvin=kelvin, xy=xy)
+        return cls(on=True, brightness=brightness, kelvin=kelvin, xy=xy)
 
-    def naar_service_data(self) -> tuple[str, dict[str, Any]]:
-        """Wat er nodig is om deze stand af te dwingen op een enkele lamp."""
-        if not self.aan:
+    def to_service_data(self) -> tuple[str, dict[str, Any]]:
+        """What it takes to force this state onto a single lamp."""
+        if not self.on:
             return "turn_off", {}
         data: dict[str, Any] = {}
         if self.brightness is not None:
@@ -97,184 +96,202 @@ class Doel:
 
 
 @dataclass
-class Opdracht:
-    """Een gevangen verzoek, wachtend op verificatie."""
+class Job:
+    """A caught request, waiting to be verified."""
 
-    doelen: dict[str, Doel]
-    poging: int = 0
-    herkomst: str = ""
-    mislukt: list[str] = field(default_factory=list)
+    targets: dict[str, Target]
+    attempt: int = 0
+    source: str = ""
+    failed: list[str] = field(default_factory=list)
 
 
 class Watcher:
-    """Luistert, verifieert en corrigeert."""
+    """Listens, verifies and corrects."""
 
-    def __init__(self, hass: HomeAssistant, definities: HueDefinitions, opties) -> None:
+    def __init__(self, hass: HomeAssistant, definitions: HueDefinitions, options) -> None:
         self.hass = hass
-        self.definities = definities
-        self.opties = opties
-        self._eigen_contexten: set[str] = set()
-        self._lopend: dict[str, asyncio.Task] = {}
-        self.correcties = 0
-        self.mislukkingen = 0
-        self.laatste_fout: str | None = None
+        self.definitions = definitions
+        self.options = options
+        self._own_contexts: set[str] = set()
+        self.corrections = 0
+        self.failures = 0
+        self.last_failure: str | None = None
 
     @callback
-    def behandel_event(self, event: Event) -> None:
-        """Beoordeel een call_service-event en zet zo nodig een controle uit."""
+    def handle_event(self, event: Event) -> None:
+        """Judge a call_service event and schedule a check when relevant."""
         data = event.data
-        domein = data.get("domain")
-        dienst = data.get("service")
+        domain = data.get("domain")
+        service = data.get("service")
 
-        # Onze eigen correcties mogen geen nieuwe controle uitlokken; dat zou een
-        # oneindige lus opleveren. De context waarmee wij aanroepen is bekend.
-        if event.context and event.context.id in self._eigen_contexten:
+        # Our own corrections must not trigger another check; that would be an
+        # endless loop. The context we call with is known to us.
+        if event.context and event.context.id in self._own_contexts:
             return
 
-        if domein == "light" and dienst in ("turn_on", "turn_off", "toggle"):
-            doelen = self._doelen_voor_licht(dienst, data.get("service_data", {}))
-            herkomst = f"light.{dienst}"
-        elif domein == "scene" and dienst == "turn_on" and self.opties.watch_scenes:
-            doelen = self._doelen_voor_scene(data.get("service_data", {}))
-            herkomst = "scene.turn_on"
+        if domain == "light" and service in ("turn_on", "turn_off", "toggle"):
+            targets = self._targets_for_light(service, data.get("service_data", {}))
+            source = f"light.{service}"
+        elif domain == "scene" and service == "turn_on" and self.options.watch_scenes:
+            targets = self._targets_for_scene(data.get("service_data", {}))
+            source = "scene.turn_on"
         else:
             return
 
-        doelen = {
-            e: d for e, d in doelen.items() if e not in self.opties.excluded
-        }
-        if doelen:
+        targets = {e: t for e, t in targets.items() if e not in self.options.excluded}
+        if targets:
             self.hass.async_create_task(
-                self._controleer(Opdracht(doelen=doelen, herkomst=herkomst))
+                self._verify(Job(targets=targets, source=source))
             )
 
-    def _entiteiten_uit(self, service_data: dict[str, Any]) -> list[str]:
-        ruw = service_data.get(ATTR_ENTITY_ID) or []
-        return [ruw] if isinstance(ruw, str) else list(ruw)
+    def _entities_from(self, service_data: dict[str, Any]) -> list[str]:
+        raw = service_data.get(ATTR_ENTITY_ID) or []
+        return [raw] if isinstance(raw, str) else list(raw)
 
-    def _doelen_voor_licht(self, dienst: str, data: dict[str, Any]) -> dict[str, Doel]:
-        doelen: dict[str, Doel] = {}
-        for entiteit in self._entiteiten_uit(data):
-            leden = self.definities.group_members(entiteit)
-            is_groep = bool(leden)
+    def _targets_for_light(self, service: str, data: dict[str, Any]) -> dict[str, Target]:
+        targets: dict[str, Target] = {}
+        for entity in self._entities_from(data):
+            members = self.definitions.group_members(entity)
+            is_group = bool(members)
 
-            if is_groep and not self.opties.watch_groups:
+            if is_group and not self.options.watch_groups:
                 continue
-            if not is_groep and not self.opties.watch_lights:
+            if not is_group and not self.options.watch_lights:
                 continue
 
-            if dienst == "toggle":
-                # De bedoelde eindstand hangt af van de stand op dit moment, dus
-                # die moet nu vastgelegd worden -- na de wachttijd is hij weg.
-                huidig = self.hass.states.get(entiteit)
-                aan_straks = not (huidig and huidig.state == STATE_ON)
-                doel = Doel(aan=aan_straks)
+            if service == "toggle":
+                # The intended end state depends on the state right now, so it
+                # has to be captured here -- after the delay it is gone.
+                current = self.hass.states.get(entity)
+                will_be_on = not (current and current.state == STATE_ON)
+                target = Target(on=will_be_on)
             else:
-                doel = Doel.van_service_data(dienst, data)
+                target = Target.from_service_data(service, data)
 
-            for lamp in (leden or [entiteit]):
-                doelen[lamp] = doel
-        return doelen
+            for lamp in members or [entity]:
+                targets[lamp] = target
+        return targets
 
-    def _doelen_voor_scene(self, data: dict[str, Any]) -> dict[str, Doel]:
-        doelen: dict[str, Doel] = {}
-        for scene in self._entiteiten_uit(data):
-            for lamp, actie in self.definities.scene_targets(scene).items():
-                doelen[lamp] = Doel.van_hue_actie(actie)
-        return doelen
+    def _targets_for_scene(self, data: dict[str, Any]) -> dict[str, Target]:
+        targets: dict[str, Target] = {}
+        for scene in self._entities_from(data):
+            for lamp, action in self.definitions.scene_targets(scene).items():
+                targets[lamp] = Target.from_hue_action(action)
+        return targets
 
-    async def _controleer(self, opdracht: Opdracht) -> None:
-        """Wacht, vergelijk, en corrigeer wat afwijkt."""
-        for poging in range(1, self.opties.retries + 1):
-            await asyncio.sleep(self.opties.delay)
-            opdracht.poging = poging
+    async def _verify(self, job: Job) -> None:
+        """Wait, compare, and correct whatever deviates."""
+        for attempt in range(1, self.options.retries + 1):
+            await asyncio.sleep(self.options.delay)
+            job.attempt = attempt
 
-            afwijkend = {
-                lamp: doel
-                for lamp, doel in opdracht.doelen.items()
-                if self._wijkt_af(lamp, doel)
+            deviating = {
+                lamp: target
+                for lamp, target in job.targets.items()
+                if self._deviates(lamp, target)
             }
-            if not afwijkend:
-                if poging > 1:
-                    _LOGGER.debug("Alles goed na poging %d", poging)
+            if not deviating:
+                if attempt > 1:
+                    _LOGGER.debug("All correct after attempt %d", attempt)
                 return
 
             _LOGGER.debug(
-                "Poging %d: %d lamp(en) wijken af: %s",
-                poging, len(afwijkend), ", ".join(afwijkend),
+                "Attempt %d: %d lamp(s) deviate: %s",
+                attempt, len(deviating), ", ".join(deviating),
             )
-            await self._corrigeer(afwijkend)
-            self.correcties += len(afwijkend)
+            await self._correct(deviating)
+            self.corrections += len(deviating)
             self.hass.bus.async_fire(
                 EVENT_CORRECTED,
-                {"entities": list(afwijkend), "attempt": poging, "source": opdracht.herkomst},
+                {"entities": list(deviating), "attempt": attempt, "source": job.source},
             )
 
-        # Na de laatste poging nog steeds mis: opgeven en melden.
-        rest = [l for l, d in opdracht.doelen.items() if self._wijkt_af(l, d)]
-        if rest:
-            self.mislukkingen += len(rest)
-            self.laatste_fout = ", ".join(rest)
+        # Still wrong after the last attempt: give up and report.
+        # Lamps we cannot verify are excluded from the tally: reporting them as
+        # failures every single time would drown out the real ones.
+        remaining = [
+            l for l, t in job.targets.items()
+            if self._deviates(l, t) and not self._unverifiable(l)
+        ]
+        if remaining:
+            self.failures += len(remaining)
+            self.last_failure = ", ".join(remaining)
             _LOGGER.warning(
-                "Na %d pogingen niet gelukt: %s (aanleiding: %s)",
-                self.opties.retries, self.laatste_fout, opdracht.herkomst,
+                "Gave up after %d attempts: %s (triggered by: %s)",
+                self.options.retries, self.last_failure, job.source,
             )
             self.hass.bus.async_fire(
                 EVENT_FAILED,
-                {"entities": rest, "attempts": self.opties.retries, "source": opdracht.herkomst},
+                {"entities": remaining, "attempts": self.options.retries, "source": job.source},
             )
 
-    def _wijkt_af(self, lamp: str, doel: Doel) -> bool:
-        """Bepaal of een lamp niet is wat er gevraagd werd."""
+    def _deviates(self, lamp: str, target: Target) -> bool:
+        """Decide whether a lamp is not what was asked for."""
         state = self.hass.states.get(lamp)
-        if state is None or state.state in ONBEKEND:
-            # Onbereikbaar valt buiten beschouwing. Een lamp zonder stroom --
-            # bijvoorbeeld achter een deurschakelaar in een kast -- zou anders
-            # elke ronde opnieuw geprobeerd worden en altijd als fout eindigen.
-            return False
+        if state is None or state.state in UNKNOWN_STATES:
+            # Unreachable lamps are normally left out: a bulb without power --
+            # one behind a cupboard door switch, say -- would otherwise be
+            # retried every round and fail every time.
+            #
+            # The exception list turns that around for lamps whose state cannot
+            # be trusted but which still need the command. A Hue lamp used as a
+            # proxy for non-Hue hardware is the case this was built for: it
+            # reports unavailable, yet the command has to reach it. Those are
+            # treated as deviating so a correction is sent, and they are left
+            # out of the failure tally because there is nothing to verify.
+            return self._unverifiable(lamp) and target.on
 
-        werkelijk_aan = state.state == STATE_ON
-        if werkelijk_aan != doel.aan:
+        actually_on = state.state == STATE_ON
+        if actually_on != target.on:
             return True
-        if not doel.aan:
+        if not target.on:
             return False
 
         attrs = state.attributes
-        if self.opties.check_brightness and doel.brightness is not None:
-            nu = attrs.get("brightness")
-            if nu is None or abs(int(nu) - doel.brightness) > self.opties.brightness_tolerance:
+        if self.options.check_brightness and target.brightness is not None:
+            now = attrs.get("brightness")
+            if now is None or abs(int(now) - target.brightness) > self.options.brightness_tolerance:
                 return True
 
-        if self.opties.check_color:
-            if doel.xy is not None:
-                nu = attrs.get("xy_color")
-                if nu is None or max(abs(nu[0] - doel.xy[0]), abs(nu[1] - doel.xy[1])) > 0.02:
+        if self.options.check_color:
+            if target.xy is not None:
+                now = attrs.get("xy_color")
+                if now is None or max(
+                    abs(now[0] - target.xy[0]), abs(now[1] - target.xy[1])
+                ) > 0.02:
                     return True
-            elif doel.kelvin is not None:
-                nu = attrs.get("color_temp_kelvin")
-                if nu is None:
+            elif target.kelvin is not None:
+                now = attrs.get("color_temp_kelvin")
+                if now is None:
                     return True
-                # Vergelijken in mired: gelijke stappen zijn daar visueel gelijk,
-                # in kelvin niet. 100K bij 2000K is zichtbaar, bij 6000K niet.
-                verschil = abs(1_000_000 / int(nu) - 1_000_000 / doel.kelvin)
-                if verschil > self.opties.mirek_tolerance:
+                # Compare in mired: equal steps there are visually equal, in
+                # kelvin they are not. 100K at 2000K is obvious, at 6000K it is
+                # imperceptible.
+                difference = abs(1_000_000 / int(now) - 1_000_000 / target.kelvin)
+                if difference > self.options.mirek_tolerance:
                     return True
         return False
 
-    async def _corrigeer(self, afwijkend: dict[str, Doel]) -> None:
-        """Stuur elke lamp afzonderlijk aan.
+    def _unverifiable(self, lamp: str) -> bool:
+        """Is this a lamp we correct blindly, without being able to check?"""
+        if not self.options.skip_unavailable:
+            return True
+        return lamp in self.options.unavailable_exceptions
 
-        Afzonderlijk en niet als groep: een unicast-commando wordt door de
-        Zigbee-stack bevestigd en zo nodig herhaald, een groupcast niet. Dat is
-        precies het verschil waar dit hele mechanisme om draait.
+    async def _correct(self, deviating: dict[str, Target]) -> None:
+        """Address each lamp on its own.
+
+        One at a time rather than as a group: a unicast command is acknowledged
+        by the Zigbee stack and retried when needed, a groupcast is not. That
+        difference is the entire point of this integration.
         """
-        for lamp, doel in afwijkend.items():
-            dienst, data = doel.naar_service_data()
+        for lamp, target in deviating.items():
+            service, data = target.to_service_data()
             context = Context()
-            self._eigen_contexten.add(context.id)
-            if len(self._eigen_contexten) > 500:
-                self._eigen_contexten = set(list(self._eigen_contexten)[-250:])
+            self._own_contexts.add(context.id)
+            if len(self._own_contexts) > 500:
+                self._own_contexts = set(list(self._own_contexts)[-250:])
             await self.hass.services.async_call(
-                "light", dienst, {ATTR_ENTITY_ID: lamp, **data},
+                "light", service, {ATTR_ENTITY_ID: lamp, **data},
                 blocking=False, context=context,
             )

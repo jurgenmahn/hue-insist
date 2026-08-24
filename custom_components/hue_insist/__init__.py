@@ -1,15 +1,15 @@
-"""Hue Insist -- zorgt dat een lichtcommando ook echt uitgevoerd wordt.
+"""Hue Insist -- makes sure a light command is actually carried out.
 
-Een Hue-groep of scene gaat als Zigbee groupcast de lucht in. Groupcast wordt niet
-per lamp bevestigd en dus ook niet herhaald: een lamp met matig bereik mist het
-bericht definitief, en Home Assistant merkt daar niets van omdat de groep al als
-"aan" telt zodra een van de leden brandt.
+A Hue group or scene goes out as a Zigbee groupcast. Groupcast is not
+acknowledged per lamp and therefore never retried: a bulb with marginal range
+misses the message for good, and Home Assistant never notices because the group
+already counts as "on" once one of its members lights up.
 
-Deze integratie vangt elk lichtverzoek dat via Home Assistant loopt, vertaalt het
-naar een concrete eindstand per lamp -- voor scenes rechtstreeks uit de definitie
-op de bridge, inclusief helderheid en kleur -- controleert na een korte pauze wat
-er werkelijk gebeurd is, en corrigeert afwijkende lampen stuk voor stuk. Die
-losse commando's gaan als unicast en worden wel bevestigd.
+This integration catches every light request that passes through Home Assistant,
+translates it into a concrete end state per lamp -- for scenes straight from the
+definition on the bridge, brightness and colour included -- checks after a short
+pause what actually happened, and corrects deviating lamps one by one. Those
+single-target commands go out as unicast and do get acknowledged.
 """
 
 from __future__ import annotations
@@ -31,6 +31,8 @@ from .const import (
     CONF_EXCLUDED,
     CONF_MIREK_TOLERANCE,
     CONF_RETRIES,
+    CONF_SKIP_UNAVAILABLE,
+    CONF_UNAVAILABLE_EXCEPTIONS,
     CONF_WATCH_GROUPS,
     CONF_WATCH_LIGHTS,
     CONF_WATCH_SCENES,
@@ -38,6 +40,7 @@ from .const import (
     DEFAULT_DELAY,
     DEFAULT_MIREK_TOLERANCE,
     DEFAULT_RETRIES,
+    DEFAULT_SKIP_UNAVAILABLE,
     DOMAIN,
 )
 from .hue_api import HueDefinitions
@@ -46,13 +49,13 @@ from .watcher import Watcher
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR]
 
-# De bridge wordt periodiek opnieuw uitgelezen zodat een nieuwe of gewijzigde
-# scene vanzelf meeloopt, zonder herstart.
-VERVERS_INTERVAL = timedelta(minutes=30)
+# The bridge is re-read periodically so a new or changed scene is picked up
+# without needing a restart.
+REFRESH_INTERVAL = timedelta(minutes=30)
 
 
 @dataclass
-class Opties:
+class Options:
     retries: int
     delay: float
     watch_lights: bool
@@ -63,9 +66,11 @@ class Opties:
     excluded: set[str]
     brightness_tolerance: int
     mirek_tolerance: int
+    skip_unavailable: bool
+    unavailable_exceptions: set[str]
 
     @classmethod
-    def van_entry(cls, entry: ConfigEntry) -> "Opties":
+    def from_entry(cls, entry: ConfigEntry) -> "Options":
         o = entry.options
         return cls(
             retries=int(o.get(CONF_RETRIES, DEFAULT_RETRIES)),
@@ -78,43 +83,45 @@ class Opties:
             excluded=set(o.get(CONF_EXCLUDED, [])),
             brightness_tolerance=int(o.get(CONF_BRIGHTNESS_TOLERANCE, DEFAULT_BRIGHTNESS_TOLERANCE)),
             mirek_tolerance=int(o.get(CONF_MIREK_TOLERANCE, DEFAULT_MIREK_TOLERANCE)),
+            skip_unavailable=bool(o.get(CONF_SKIP_UNAVAILABLE, DEFAULT_SKIP_UNAVAILABLE)),
+            unavailable_exceptions=set(o.get(CONF_UNAVAILABLE_EXCEPTIONS, [])),
         )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    definities = HueDefinitions(hass)
-    await definities.async_refresh()
+    definitions = HueDefinitions(hass)
+    await definitions.async_refresh()
 
-    watcher = Watcher(hass, definities, Opties.van_entry(entry))
+    watcher = Watcher(hass, definitions, Options.from_entry(entry))
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = watcher
 
     entry.async_on_unload(
-        hass.bus.async_listen(EVENT_CALL_SERVICE, watcher.behandel_event)
+        hass.bus.async_listen(EVENT_CALL_SERVICE, watcher.handle_event)
     )
 
     async def _ververs(_now) -> None:
-        await definities.async_refresh()
+        await definitions.async_refresh()
 
     entry.async_on_unload(
-        async_track_time_interval(hass, _ververs, VERVERS_INTERVAL)
+        async_track_time_interval(hass, _ververs, REFRESH_INTERVAL)
     )
-    entry.async_on_unload(entry.add_update_listener(_opties_gewijzigd))
+    entry.async_on_unload(entry.add_update_listener(_options_updated))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _LOGGER.info(
-        "Hue Insist actief: %d pogingen, %.1fs tussenpauze, bridge %s",
-        watcher.opties.retries,
-        watcher.opties.delay,
-        "bereikbaar" if definities.available else "niet bereikbaar",
+        "Hue Insist active: %d attempts, %.1fs delay, bridge %s",
+        watcher.options.retries,
+        watcher.options.delay,
+        "reachable" if definitions.available else "unreachable",
     )
     return True
 
 
-async def _opties_gewijzigd(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Nieuwe opties meteen laten gelden, zonder herstart."""
+async def _options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Apply new options immediately, without a restart."""
     watcher: Watcher = hass.data[DOMAIN][entry.entry_id]
-    watcher.opties = Opties.van_entry(entry)
-    await watcher.definities.async_refresh()
+    watcher.options = Options.from_entry(entry)
+    await watcher.definitions.async_refresh()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
