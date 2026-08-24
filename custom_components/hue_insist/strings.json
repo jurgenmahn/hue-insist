@@ -6,7 +6,7 @@
         "description": "Verifies that light commands were actually carried out and repairs lamps that missed the command. The defaults work as they are.",
         "data": {
           "retries": "Number of attempts",
-          "delay": "Delay before verifying",
+          "delay": "Minimum wait before verifying",
           "watch_lights": "Watch individual lights",
           "watch_groups": "Watch groups and rooms",
           "watch_scenes": "Watch scenes",
@@ -20,6 +20,12 @@
           "command_rate": "Maximum commands per second",
           "debug_log": "Verbose logging",
           "settle_timeout": "Maximum extra wait for the bridge to finish"
+        },
+        "data_description": {
+          "delay": "The grace period the bridge gets to start. Right after a command no lamp has reported back yet, so checking immediately would judge the bridge before it began. Verification never happens sooner than this; waiting for the bridge to finish is added on top.",
+          "settle_timeout": "After the minimum wait, verification holds off for as long as the lamps are still changing state, so a large request is judged only once the bridge is done. This caps that extra wait. Set to 0 to verify straight after the minimum wait.",
+          "command_rate": "The bridge handles about ten light commands per second and silently drops the rest, so corrections are spread out rather than fired all at once.",
+          "debug_log": "Writes a line per caught request, per deviating lamp and per correction to the Home Assistant log. Takes effect immediately."
         }
       }
     },
@@ -33,7 +39,7 @@
         "title": "Hue Insist",
         "data": {
           "retries": "Number of attempts",
-          "delay": "Delay before verifying",
+          "delay": "Minimum wait before verifying",
           "watch_lights": "Watch individual lights",
           "watch_groups": "Watch groups and rooms",
           "watch_scenes": "Watch scenes",
@@ -47,6 +53,12 @@
           "command_rate": "Maximum commands per second",
           "debug_log": "Verbose logging",
           "settle_timeout": "Maximum extra wait for the bridge to finish"
+        },
+        "data_description": {
+          "delay": "The grace period the bridge gets to start. Right after a command no lamp has reported back yet, so checking immediately would judge the bridge before it began. Verification never happens sooner than this; waiting for the bridge to finish is added on top.",
+          "settle_timeout": "After the minimum wait, verification holds off for as long as the lamps are still changing state, so a large request is judged only once the bridge is done. This caps that extra wait. Set to 0 to verify straight after the minimum wait.",
+          "command_rate": "The bridge handles about ten light commands per second and silently drops the rest, so corrections are spread out rather than fired all at once.",
+          "debug_log": "Writes a line per caught request, per deviating lamp and per correction to the Home Assistant log. Takes effect immediately."
         }
       }
     }

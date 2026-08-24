@@ -52,7 +52,7 @@ Home Assistant configuration and restart.
 | Option | Default | Notes |
 |---|---|---|
 | Number of attempts | 3 | How often a deviating lamp is retried |
-| Delay | 2 s | Pause before verifying, and between attempts |
+| Minimum wait before verifying | 2 s | Floor under every check, and the pause between attempts |
 | Watch individual lights | on | Requests aimed at a single lamp |
 | Watch groups and rooms | on | Requests aimed at a Hue room or zone |
 | Watch scenes | on | Requests aimed at a scene |
@@ -66,6 +66,25 @@ Home Assistant configuration and restart.
 | Maximum extra wait for the bridge | 15 s | Ceiling on waiting for a large request to finish; 0 disables |
 | Maximum commands per second | 10 | How fast corrections are sent to the bridge |
 | Verbose logging | off | A line per request, per deviating lamp and per correction |
+
+### The two waits, and why there are two
+
+**Minimum wait** is the grace period the bridge gets to start. Right after a
+command no lamp has reported back yet, so a check at that moment would judge the
+bridge before it began -- and every lamp would look like it had missed the
+message. Nothing is ever verified sooner than this.
+
+**Maximum extra wait** is the ceiling on what comes after: once the minimum has
+passed, verification holds off for as long as the lamps are still changing state.
+
+So the first is a floor and the second is a ceiling, and they never overlap. A
+single lamp is verified after the minimum wait and no longer, because a bridge
+that has already finished produces no further state changes. A request touching
+thirty lamps is verified once the bridge actually stops working, however long
+that takes, up to the ceiling.
+
+Setting the ceiling to 0 leaves only the fixed minimum -- the behaviour before
+this was added.
 
 ### Why it waits for the bridge
 
