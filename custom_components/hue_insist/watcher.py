@@ -435,31 +435,64 @@ class Watcher:
                 return f"brightness {int(now)}, expected {target.brightness}"
 
         if self.options.check_color:
-            if target.xy is not None and color_supported(modes):
+            if target.xy is not None:
                 now = attrs.get("xy_color")
-                if now is None:
-                    return f"colour unknown, expected xy {target.xy[0]:.3f},{target.xy[1]:.3f}"
-                if max(
-                    abs(now[0] - target.xy[0]), abs(now[1] - target.xy[1])
-                ) > XY_TOLERANCE:
-                    return (
-                        f"xy {now[0]:.3f},{now[1]:.3f}, "
-                        f"expected {target.xy[0]:.3f},{target.xy[1]:.3f}"
+                if now is not None:
+                    if max(
+                        abs(now[0] - target.xy[0]), abs(now[1] - target.xy[1])
+                    ) > XY_TOLERANCE:
+                        return (
+                            f"xy {now[0]:.3f},{now[1]:.3f}, "
+                            f"expected {target.xy[0]:.3f},{target.xy[1]:.3f}"
+                        )
+                elif color_supported(modes):
+                    self._colour_unclear(
+                        lamp, attrs,
+                        f"xy {target.xy[0]:.3f},{target.xy[1]:.3f}",
                     )
-            elif target.kelvin is not None and color_temp_supported(modes):
+            elif target.kelvin is not None:
                 now = attrs.get("color_temp_kelvin")
-                if now is None:
-                    return f"colour temperature unknown, expected {target.kelvin}K"
-                # Compare in mired: equal steps there are visually equal, in
-                # kelvin they are not. 100K at 2000K is obvious, at 6000K it is
-                # imperceptible.
-                difference = abs(1_000_000 / int(now) - 1_000_000 / target.kelvin)
-                if difference > self.options.mirek_tolerance:
-                    return (
-                        f"{int(now)}K, expected {target.kelvin}K "
-                        f"({difference:.0f} mired off)"
-                    )
+                if now is not None:
+                    # Compare in mired: equal steps there are visually equal, in
+                    # kelvin they are not. 100K at 2000K is obvious, at 6000K it
+                    # is imperceptible.
+                    difference = abs(1_000_000 / int(now) - 1_000_000 / target.kelvin)
+                    if difference > self.options.mirek_tolerance:
+                        return (
+                            f"{int(now)}K, expected {target.kelvin}K "
+                            f"({difference:.0f} mired off)"
+                        )
+                elif color_temp_supported(modes):
+                    self._colour_unclear(lamp, attrs, f"{target.kelvin}K")
         return None
+
+    def _colour_unclear(self, lamp: str, attrs, wanted: str) -> None:
+        """Note that the lamp answered in a different colour mode than was asked.
+
+        Deliberately not a deviation. A light reports only the attribute for the
+        colour mode it is currently in, so a lamp sitting in xy has no colour
+        temperature to compare against -- and converting between the two loses
+        far too much to judge on. Home Assistant's own round trip through xy
+        comes back over a hundred mired out at warm white, well past any sane
+        tolerance, which would condemn a lamp that is doing exactly what it was
+        told and never stop correcting it.
+
+        So report the mismatch and leave the verdict to a human. Third-party
+        Zigbee bulbs joined to a Hue bridge are the usual cause: the bridge
+        resolves the requested colour temperature to xy for that lamp's gamut,
+        and xy is what comes back.
+        """
+        if attrs.get("xy_color"):
+            reports = "xy {:.3f},{:.3f}".format(*attrs["xy_color"])
+        elif attrs.get("color_temp_kelvin"):
+            reports = f"{attrs['color_temp_kelvin']}K"
+        else:
+            reports = "no colour at all"
+        _LOGGER.debug(
+            "  %s: colour not comparable -- asked for %s, lamp reports %s "
+            "(colour mode %s); not counted as a deviation",
+            lamp, wanted, reports, attrs.get("color_mode") or "unknown",
+        )
 
     @callback
     def _publish(self) -> None:

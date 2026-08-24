@@ -215,6 +215,17 @@ and is therefore invisible. Everything that does go through Home Assistant —
 including HomeKit and Siri, as long as they run through the Home Assistant
 bridge — is covered.
 
+**Colour across modes.** A light reports only the attribute belonging to the
+colour mode it is currently in, so a lamp sitting in xy has no colour temperature
+to compare against. Converting between the two loses far too much to judge on --
+Home Assistant's own round trip through xy comes back over a hundred mired out at
+warm white, well past any sane tolerance. Such a mismatch is logged and left
+alone rather than corrected forever.
+
+Third-party Zigbee bulbs joined to a Hue bridge are the usual cause: the bridge
+resolves the requested colour temperature to xy for that lamp's gamut, and xy is
+what comes back.
+
 **Anything a lamp cannot do.** Verification is limited to the capabilities the
 entity reports through `supported_color_modes`. A Hue smart plug reports
 `["onoff"]`: it has no brightness, so a scene brightness is neither checked
