@@ -24,6 +24,7 @@ from .const import (
     CONF_EXCLUDED,
     CONF_MIREK_TOLERANCE,
     CONF_RETRIES,
+    CONF_SETTLE_TIMEOUT,
     CONF_SKIP_UNAVAILABLE,
     CONF_UNAVAILABLE_EXCEPTIONS,
     CONF_WATCH_GROUPS,
@@ -35,6 +36,7 @@ from .const import (
     DEFAULT_DELAY,
     DEFAULT_MIREK_TOLERANCE,
     DEFAULT_RETRIES,
+    DEFAULT_SETTLE_TIMEOUT,
     DEFAULT_SKIP_UNAVAILABLE,
     DOMAIN,
 )
@@ -79,6 +81,12 @@ def _schema(current: dict[str, Any]) -> vol.Schema:
                          default=h(CONF_BRIGHTNESS_TOLERANCE, DEFAULT_BRIGHTNESS_TOLERANCE)):
                 selector.NumberSelector(
                     selector.NumberSelectorConfig(min=0, max=64, step=1,
+                                                  mode=selector.NumberSelectorMode.SLIDER)),
+            vol.Required(CONF_SETTLE_TIMEOUT,
+                         default=h(CONF_SETTLE_TIMEOUT, DEFAULT_SETTLE_TIMEOUT)):
+                selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=0, max=60, step=1,
+                                                  unit_of_measurement="s",
                                                   mode=selector.NumberSelectorMode.SLIDER)),
             vol.Required(CONF_COMMAND_RATE,
                          default=h(CONF_COMMAND_RATE, DEFAULT_COMMAND_RATE)):

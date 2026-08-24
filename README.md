@@ -24,7 +24,8 @@ case for 55 minutes straight.
 2. **Translates** it into a concrete target state per lamp. For scenes that comes
    straight from the definition on the Hue bridge, so brightness and colour are
    included, not just on/off.
-3. **Verifies** after a configurable pause what actually happened.
+3. **Verifies** what actually happened -- after a short pause, and after the
+   bridge has stopped working through the request.
 4. **Corrects** each deviating lamp *individually*, paced to what the bridge can
    take. Individual is the whole point: a single-target command does get
    acknowledged. The pacing matters too -- see below.
@@ -62,8 +63,27 @@ Home Assistant configuration and restart.
 | Correct anyway | empty | Exceptions to the line above |
 | Brightness tolerance | 8 | On a 0-255 scale, a little over 3% |
 | Colour temperature tolerance | 15 mired | Smaller differences are not visible |
+| Maximum extra wait for the bridge | 15 s | Ceiling on waiting for a large request to finish; 0 disables |
 | Maximum commands per second | 10 | How fast corrections are sent to the bridge |
 | Verbose logging | off | A line per request, per deviating lamp and per correction |
+
+### Why it waits for the bridge
+
+A fixed verification delay is right for one lamp and wrong for a whole house.
+Switching thirty lamps takes the bridge several seconds, so checking the result
+after two means "correcting" lamps whose turn had simply not come yet -- and
+those corrections pile onto the queue that is already the bottleneck. The
+integration ends up racing the bridge and losing.
+
+Rather than guess how long the bridge needs, it watches the bridge work. Every
+lamp the bridge reaches updates its state in Home Assistant; once those updates
+stop for a second, the request has been carried out as far as it is going to be.
+Only then is anything judged.
+
+Measured: a request the bridge spends four seconds on is verified after about
+five. A request it has already finished is verified immediately, so a single lamp
+is no slower than before. The timeout is there for the lamp that never stops
+changing.
 
 ### Why the commands are paced
 

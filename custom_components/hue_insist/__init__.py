@@ -33,6 +33,7 @@ from .const import (
     CONF_EXCLUDED,
     CONF_MIREK_TOLERANCE,
     CONF_RETRIES,
+    CONF_SETTLE_TIMEOUT,
     CONF_SKIP_UNAVAILABLE,
     CONF_UNAVAILABLE_EXCEPTIONS,
     CONF_WATCH_GROUPS,
@@ -44,6 +45,7 @@ from .const import (
     DEFAULT_DELAY,
     DEFAULT_MIREK_TOLERANCE,
     DEFAULT_RETRIES,
+    DEFAULT_SETTLE_TIMEOUT,
     DEFAULT_SKIP_UNAVAILABLE,
     DOMAIN,
 )
@@ -89,6 +91,7 @@ class Options:
     unavailable_exceptions: set[str]
     command_rate: int
     debug_log: bool
+    settle_timeout: float
 
     @classmethod
     def from_entry(cls, entry: ConfigEntry) -> "Options":
@@ -108,6 +111,7 @@ class Options:
             unavailable_exceptions=set(o.get(CONF_UNAVAILABLE_EXCEPTIONS, [])),
             command_rate=int(o.get(CONF_COMMAND_RATE, DEFAULT_COMMAND_RATE)),
             debug_log=bool(o.get(CONF_DEBUG_LOG, DEFAULT_DEBUG_LOG)),
+            settle_timeout=float(o.get(CONF_SETTLE_TIMEOUT, DEFAULT_SETTLE_TIMEOUT)),
         )
 
 

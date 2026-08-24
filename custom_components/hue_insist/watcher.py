@@ -50,6 +50,12 @@ UNKNOWN_STATES = (None, "unknown", "unavailable")
 # starts to notice on a white wall.
 XY_TOLERANCE = 0.02
 
+# How long the target lamps must stay quiet before the bridge counts as done,
+# and how often to look. Both deliberately fixed: they describe how a Hue bridge
+# behaves, not a preference anyone needs to tune.
+SETTLE_WINDOW = 1.0
+SETTLE_POLL = 0.25
+
 
 def _describe(service: str, data: dict[str, Any]) -> str:
     """Render a light call the way it will actually be sent, for the log."""
@@ -267,6 +273,7 @@ class Watcher:
         corrected: set[str] = set()
         for attempt in range(1, self.options.retries + 1):
             await asyncio.sleep(self.options.delay)
+            await self._settle(job)
             job.attempt = attempt
 
             deviations = {}
@@ -335,6 +342,47 @@ class Watcher:
             self.hass.bus.async_fire(
                 EVENT_FAILED,
                 {"entities": remaining, "attempts": self.options.retries, "source": job.source},
+            )
+
+    async def _settle(self, job: Job) -> None:
+        """Hold off while the bridge is still working through the request.
+
+        Turning off a whole house takes the bridge several seconds. Judging the
+        result after a fixed two means correcting lamps whose turn had simply not
+        come yet, which adds a pile of commands to the queue that is already the
+        bottleneck -- the integration racing the bridge and losing.
+
+        Rather than guess how long the bridge needs, watch it work: every lamp it
+        reaches updates its state, so once those updates stop for a moment the
+        request has been carried out as far as it is going to be. The timeout is
+        there for the lamp that never stops changing.
+        """
+        if not self.options.settle_timeout:
+            return
+
+        started = self.hass.loop.time()
+        deadline = started + self.options.settle_timeout
+        while self.hass.loop.time() < deadline:
+            latest = max(
+                (
+                    state.last_updated
+                    for lamp in job.targets
+                    if (state := self.hass.states.get(lamp)) is not None
+                ),
+                default=None,
+            )
+            if latest is None:
+                return
+            quiet = (dt_util.utcnow() - latest).total_seconds()
+            if quiet >= SETTLE_WINDOW:
+                break
+            await asyncio.sleep(min(SETTLE_WINDOW - quiet, SETTLE_POLL))
+
+        waited = self.hass.loop.time() - started
+        if waited >= SETTLE_POLL:
+            _LOGGER.debug(
+                "Waited another %.1fs for the bridge to work through %d lamp(s)",
+                waited, len(job.targets),
             )
 
     def _deviation(self, lamp: str, target: Target) -> str | None:

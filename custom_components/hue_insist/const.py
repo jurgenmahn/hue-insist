@@ -20,6 +20,7 @@ CONF_SKIP_UNAVAILABLE = "skip_unavailable"
 CONF_UNAVAILABLE_EXCEPTIONS = "unavailable_exceptions"
 CONF_COMMAND_RATE = "command_rate"
 CONF_DEBUG_LOG = "debug_log"
+CONF_SETTLE_TIMEOUT = "settle_timeout"
 
 DEFAULT_RETRIES = 3
 DEFAULT_DELAY = 2.0
@@ -43,6 +44,13 @@ DEFAULT_COMMAND_RATE = 10
 # correction is exactly what you want while diagnosing a lamp, and far too much
 # the rest of the time.
 DEFAULT_DEBUG_LOG = False
+
+# A fixed verification delay is right for one lamp and wrong for a whole house:
+# switching thirty lamps takes the bridge several seconds, and judging the result
+# after two means "correcting" lamps whose turn had not come yet. Rather than
+# guessing how long the bridge needs, wait until the lamps stop changing state.
+# This is the ceiling on that extra wait; 0 switches the behaviour off.
+DEFAULT_SETTLE_TIMEOUT = 15
 
 # Hue reports brightness as a percentage, Home Assistant as 0-255.
 HUE_BRIGHTNESS_MAX = 100.0

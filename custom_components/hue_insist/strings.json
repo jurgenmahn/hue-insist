@@ -18,7 +18,8 @@
           "skip_unavailable": "Skip unavailable lamps",
           "unavailable_exceptions": "Correct anyway, even when they report unavailable",
           "command_rate": "Maximum commands per second",
-          "debug_log": "Verbose logging"
+          "debug_log": "Verbose logging",
+          "settle_timeout": "Maximum extra wait for the bridge to finish"
         }
       }
     },
@@ -44,7 +45,8 @@
           "skip_unavailable": "Skip unavailable lamps",
           "unavailable_exceptions": "Correct anyway, even when they report unavailable",
           "command_rate": "Maximum commands per second",
-          "debug_log": "Verbose logging"
+          "debug_log": "Verbose logging",
+          "settle_timeout": "Maximum extra wait for the bridge to finish"
         }
       }
     }

@@ -18,7 +18,8 @@
           "skip_unavailable": "Onbereikbare lampen overslaan",
           "unavailable_exceptions": "Toch corrigeren, ook als ze onbereikbaar melden",
           "command_rate": "Maximaal aantal commando's per seconde",
-          "debug_log": "Uitgebreide logging"
+          "debug_log": "Uitgebreide logging",
+          "settle_timeout": "Maximaal extra wachten tot de bridge klaar is"
         }
       }
     },
@@ -44,7 +45,8 @@
           "skip_unavailable": "Onbereikbare lampen overslaan",
           "unavailable_exceptions": "Toch corrigeren, ook als ze onbereikbaar melden",
           "command_rate": "Maximaal aantal commando's per seconde",
-          "debug_log": "Uitgebreide logging"
+          "debug_log": "Uitgebreide logging",
+          "settle_timeout": "Maximaal extra wachten tot de bridge klaar is"
         }
       }
     }
