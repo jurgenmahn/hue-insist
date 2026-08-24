@@ -29,6 +29,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.util import dt as dt_util
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -43,7 +44,7 @@ class InsistSensorDescription(SensorEntityDescription):
     """A sensor plus how to read its value out of the running statistics."""
 
     value: Callable[[Stats], int | datetime | None]
-    counter: str | None = None      # attribute to restore into after a restart
+    restore: str | None = None      # attribute to restore into after a restart
 
 
 COUNTERS: tuple[InsistSensorDescription, ...] = (
@@ -53,7 +54,7 @@ COUNTERS: tuple[InsistSensorDescription, ...] = (
         icon="mdi:import",
         state_class=SensorStateClass.TOTAL_INCREASING,
         value=lambda s: s.actions_total,
-        counter="actions_total",
+        restore="actions_total",
     ),
     InsistSensorDescription(
         key="captured_scene_actions",
@@ -61,7 +62,7 @@ COUNTERS: tuple[InsistSensorDescription, ...] = (
         icon="mdi:palette",
         state_class=SensorStateClass.TOTAL_INCREASING,
         value=lambda s: s.actions_scene,
-        counter="actions_scene",
+        restore="actions_scene",
     ),
     InsistSensorDescription(
         key="captured_group_actions",
@@ -69,7 +70,7 @@ COUNTERS: tuple[InsistSensorDescription, ...] = (
         icon="mdi:lightbulb-group",
         state_class=SensorStateClass.TOTAL_INCREASING,
         value=lambda s: s.actions_group,
-        counter="actions_group",
+        restore="actions_group",
     ),
     InsistSensorDescription(
         key="captured_device_actions",
@@ -77,7 +78,7 @@ COUNTERS: tuple[InsistSensorDescription, ...] = (
         icon="mdi:lightbulb",
         state_class=SensorStateClass.TOTAL_INCREASING,
         value=lambda s: s.actions_device,
-        counter="actions_device",
+        restore="actions_device",
     ),
     InsistSensorDescription(
         key="checked_devices",
@@ -85,7 +86,7 @@ COUNTERS: tuple[InsistSensorDescription, ...] = (
         icon="mdi:clipboard-check-outline",
         state_class=SensorStateClass.TOTAL_INCREASING,
         value=lambda s: s.devices_checked,
-        counter="devices_checked",
+        restore="devices_checked",
     ),
     InsistSensorDescription(
         key="no_correction_needed",
@@ -93,7 +94,7 @@ COUNTERS: tuple[InsistSensorDescription, ...] = (
         icon="mdi:check-circle-outline",
         state_class=SensorStateClass.TOTAL_INCREASING,
         value=lambda s: s.devices_ok,
-        counter="devices_ok",
+        restore="devices_ok",
     ),
     InsistSensorDescription(
         key="corrections",
@@ -101,7 +102,7 @@ COUNTERS: tuple[InsistSensorDescription, ...] = (
         icon="mdi:auto-fix",
         state_class=SensorStateClass.TOTAL_INCREASING,
         value=lambda s: s.corrections,
-        counter="corrections",
+        restore="corrections",
     ),
     InsistSensorDescription(
         key="failures",
@@ -109,13 +110,14 @@ COUNTERS: tuple[InsistSensorDescription, ...] = (
         icon="mdi:lightbulb-alert",
         state_class=SensorStateClass.TOTAL_INCREASING,
         value=lambda s: s.failures,
-        counter="failures",
+        restore="failures",
     ),
 )
 
 TIMESTAMPS: tuple[InsistSensorDescription, ...] = (
     InsistSensorDescription(
         key="last_action",
+        restore="last_action",
         name="Last action",
         icon="mdi:clock-outline",
         device_class=SensorDeviceClass.TIMESTAMP,
@@ -123,6 +125,7 @@ TIMESTAMPS: tuple[InsistSensorDescription, ...] = (
     ),
     InsistSensorDescription(
         key="last_correction",
+        restore="last_correction",
         name="Last correction",
         icon="mdi:clock-alert-outline",
         device_class=SensorDeviceClass.TIMESTAMP,
@@ -130,6 +133,7 @@ TIMESTAMPS: tuple[InsistSensorDescription, ...] = (
     ),
     InsistSensorDescription(
         key="last_failure",
+        restore="last_failure",
         name="Last failure",
         icon="mdi:clock-remove-outline",
         device_class=SensorDeviceClass.TIMESTAMP,
@@ -168,26 +172,44 @@ class InsistSensor(SensorEntity, RestoreEntity):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
 
-        # Pick the counter back up where it left off. Reloading the integration
-        # or restarting Home Assistant should not erase the evidence.
-        if self.entity_description.counter:
-            previous = await self.async_get_last_state()
-            if previous and previous.state not in (None, "unknown", "unavailable"):
-                try:
-                    restored = int(float(previous.state))
-                except ValueError:
-                    restored = 0
-                current = getattr(self._watcher.stats, self.entity_description.counter)
-                if restored > current:
-                    setattr(
-                        self._watcher.stats, self.entity_description.counter, restored
-                    )
+        # Pick up where we left off. Reloading the integration or restarting Home
+        # Assistant should not erase the evidence -- and restoring the counters
+        # but not the timestamps leaves "25 corrections, last correction unknown"
+        # on screen, which reads as a bug whether or not it is one.
+        if self.entity_description.restore:
+            await self._restore()
 
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass, SIGNAL_STATS_UPDATED, self._handle_update
             )
         )
+
+    async def _restore(self) -> None:
+        """Put the previous value back, unless the live one is already further on."""
+        previous = await self.async_get_last_state()
+        if previous is None or previous.state in (None, "unknown", "unavailable"):
+            return
+
+        field = self.entity_description.restore
+        current = getattr(self._watcher.stats, field)
+
+        if self.entity_description.device_class == SensorDeviceClass.TIMESTAMP:
+            restored = dt_util.parse_datetime(previous.state)
+            if restored and (current is None or restored > current):
+                setattr(self._watcher.stats, field, restored)
+                if field == "last_failure":
+                    self._watcher.stats.last_failed_entities = list(
+                        previous.attributes.get("entities") or []
+                    )
+            return
+
+        try:
+            restored = int(float(previous.state))
+        except ValueError:
+            return
+        if restored > current:
+            setattr(self._watcher.stats, field, restored)
 
     @callback
     def _handle_update(self) -> None:
