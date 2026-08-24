@@ -201,6 +201,7 @@ class Watcher:
 
     async def _verify(self, job: Job) -> None:
         """Wait, compare, and correct whatever deviates."""
+        corrected: set[str] = set()
         for attempt in range(1, self.options.retries + 1):
             await asyncio.sleep(self.options.delay)
             job.attempt = attempt
@@ -227,7 +228,15 @@ class Watcher:
                 attempt, len(deviating), ", ".join(deviating),
             )
             await self._correct(deviating)
-            self.stats.corrections += len(deviating)
+
+            # Count each lamp once per request, not once per retry round. A lamp
+            # that needs three attempts is still one lamp that needed nudging;
+            # counting per round multiplies it by the retry count and pushes the
+            # total above the number of lamps checked, which is impossible on its
+            # face and makes the ratio worthless.
+            fresh = deviating.keys() - corrected
+            corrected |= deviating.keys()
+            self.stats.corrections += len(fresh)
             self.stats.last_correction = dt_util.utcnow()
             self._publish()
             self.hass.bus.async_fire(
