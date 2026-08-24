@@ -22,6 +22,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from homeassistant.components.light import (
+    brightness_supported,
+    color_supported,
+    color_temp_supported,
+)
 from homeassistant.const import ATTR_ENTITY_ID, STATE_ON
 from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -44,6 +49,20 @@ UNKNOWN_STATES = (None, "unknown", "unavailable")
 # Above this the xy colours count as different. Roughly the point where the eye
 # starts to notice on a white wall.
 XY_TOLERANCE = 0.02
+
+
+def _describe(service: str, data: dict[str, Any]) -> str:
+    """Render a light call the way it will actually be sent, for the log."""
+    if service == "turn_off":
+        return "off"
+    parts = ["on"]
+    if "brightness" in data:
+        parts.append(f"bri {data['brightness']}")
+    if "xy_color" in data:
+        parts.append("xy {:.3f},{:.3f}".format(*data["xy_color"]))
+    elif "color_temp_kelvin" in data:
+        parts.append(f"{data['color_temp_kelvin']}K")
+    return " ".join(parts)
 
 
 @dataclass
@@ -89,31 +108,29 @@ class Target:
         xy = tuple(data["xy_color"]) if data.get("xy_color") else None
         return cls(on=True, brightness=brightness, kelvin=kelvin, xy=xy)
 
-    def to_service_data(self) -> tuple[str, dict[str, Any]]:
-        """What it takes to force this state onto a single lamp."""
+    def to_service_data(
+        self, modes: list[str] | None = None
+    ) -> tuple[str, dict[str, Any]]:
+        """What it takes to force this state onto a single lamp.
+
+        Anything the lamp cannot do is left out. A scene sets a brightness for
+        every member, including the smart plug in the corner, and sending that
+        plug a brightness is meaningless.
+        """
         if not self.on:
             return "turn_off", {}
         data: dict[str, Any] = {}
-        if self.brightness is not None:
+        if self.brightness is not None and (modes is None or brightness_supported(modes)):
             data["brightness"] = self.brightness
-        if self.xy is not None:
+        if self.xy is not None and (modes is None or color_supported(modes)):
             data["xy_color"] = list(self.xy)
-        elif self.kelvin is not None:
+        elif self.kelvin is not None and (modes is None or color_temp_supported(modes)):
             data["color_temp_kelvin"] = self.kelvin
         return "turn_on", data
 
     def __str__(self) -> str:
         """Short form for the log."""
-        if not self.on:
-            return "off"
-        parts = ["on"]
-        if self.brightness is not None:
-            parts.append(f"bri {self.brightness}")
-        if self.xy is not None:
-            parts.append(f"xy {self.xy[0]:.3f},{self.xy[1]:.3f}")
-        elif self.kelvin is not None:
-            parts.append(f"{self.kelvin}K")
-        return " ".join(parts)
+        return _describe(*self.to_service_data())
 
 
 @dataclass
@@ -350,8 +367,19 @@ class Watcher:
         if not target.on:
             return None
 
+        # Only hold a lamp to what it can actually do. A Hue smart plug reports
+        # supported_color_modes ["onoff"]: it has no brightness at all, so
+        # demanding one means it deviates on every single check, gets corrected
+        # every round, and is reported as failed every time -- for doing exactly
+        # what it was asked.
         attrs = state.attributes
-        if self.options.check_brightness and target.brightness is not None:
+        modes = attrs.get("supported_color_modes") or []
+
+        if (
+            self.options.check_brightness
+            and target.brightness is not None
+            and brightness_supported(modes)
+        ):
             now = attrs.get("brightness")
             if now is None:
                 return f"brightness unknown, expected {target.brightness}"
@@ -359,7 +387,7 @@ class Watcher:
                 return f"brightness {int(now)}, expected {target.brightness}"
 
         if self.options.check_color:
-            if target.xy is not None:
+            if target.xy is not None and color_supported(modes):
                 now = attrs.get("xy_color")
                 if now is None:
                     return f"colour unknown, expected xy {target.xy[0]:.3f},{target.xy[1]:.3f}"
@@ -370,7 +398,7 @@ class Watcher:
                         f"xy {now[0]:.3f},{now[1]:.3f}, "
                         f"expected {target.xy[0]:.3f},{target.xy[1]:.3f}"
                     )
-            elif target.kelvin is not None:
+            elif target.kelvin is not None and color_temp_supported(modes):
                 now = attrs.get("color_temp_kelvin")
                 if now is None:
                     return f"colour temperature unknown, expected {target.kelvin}K"
@@ -415,12 +443,14 @@ class Watcher:
         for index, (lamp, target) in enumerate(deviating.items()):
             if index and interval:
                 await asyncio.sleep(interval)
-            service, data = target.to_service_data()
+            state = self.hass.states.get(lamp)
+            modes = state.attributes.get("supported_color_modes") if state else None
+            service, data = target.to_service_data(modes)
             context = Context()
             self._own_contexts.add(context.id)
             if len(self._own_contexts) > 500:
                 self._own_contexts = set(list(self._own_contexts)[-250:])
-            _LOGGER.debug("  -> light.%s %s (%s)", service, lamp, target)
+            _LOGGER.debug("  -> light.%s %s (%s)", service, lamp, _describe(service, data))
             await self.hass.services.async_call(
                 "light", service, {ATTR_ENTITY_ID: lamp, **data},
                 blocking=False, context=context,

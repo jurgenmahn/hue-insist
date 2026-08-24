@@ -143,6 +143,18 @@ so a single stubborn lamp cannot inflate the ratio.
 
 Both carry `entities` and `source`, so you can hang a notification off them.
 
+## Not only Hue
+
+The catching is integration-agnostic: every `light.turn_on`, `light.turn_off`
+and `light.toggle` that passes through Home Assistant is verified, whatever
+platform the entity belongs to. A Tuya, Zigbee2MQTT, WLED or Shelly light gets
+the same treatment, because a command that silently fails to arrive is not a
+uniquely Hue problem.
+
+The Hue bridge is only needed to expand scenes and groups into their members and
+to know what a scene means per lamp. Everything else -- the state check, the
+per-lamp correction -- runs entirely on Home Assistant's own view of the entity.
+
 ## How it reaches the Hue bridge
 
 The integration reuses the credentials of the existing Hue integration in Home
@@ -163,6 +175,13 @@ are not expanded.
 and is therefore invisible. Everything that does go through Home Assistant —
 including HomeKit and Siri, as long as they run through the Home Assistant
 bridge — is covered.
+
+**Anything a lamp cannot do.** Verification is limited to the capabilities the
+entity reports through `supported_color_modes`. A Hue smart plug reports
+`["onoff"]`: it has no brightness, so a scene brightness is neither checked
+against it nor sent to it. Without that a plug deviates on every check, is
+corrected every round and reported as failed every time -- for doing exactly
+what it was asked.
 
 **Unavailable lamps**, by default. A lamp reporting `unavailable` is skipped and
 does not count as a failure -- a bulb behind a door switch would otherwise be
