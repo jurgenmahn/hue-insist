@@ -1,45 +1,41 @@
-"""A flash you actually notice.
+"""A flash you actually notice, run by the bridge rather than by us.
 
-`light.turn_on` with `flash: short` is one groupcast, so it is fast, but it
-blinks every lamp once and simultaneously. In a house that means a single blink
-per room -- easy to miss if you happen to be looking the other way -- and it
-leaves every lamp switched on afterwards.
+The Hue v2 API has a signalling mechanism that takes a duration: hand it
+`on_off` and a number of milliseconds and the bridge blinks the target for
+exactly that long, entirely on its own. On a room or zone that is a single
+request for the whole group, so every lamp is in step by construction.
 
-This service pulses instead: on, off, on, off, for as long as you ask, over a
-chosen number of lamps at a time. Picking a random subset per pulse makes the
-house ripple rather than strobe, which is both easier to notice and far kinder
-to the bridge.
+That is worth spelling out, because getting here took three worse attempts and
+each failed for a reason that is invisible from Home Assistant:
 
-The bridge is the real constraint. It handles roughly ten light commands per
-second and silently drops whatever lands on top of that -- no error, no retry.
-A pulse over N lamps costs N commands, and every pulse has an on and an off, so
-the arithmetic runs away quickly. Rather than promise a cadence the bridge
-cannot deliver, the service works out what was asked for, logs a warning when
-that exceeds the budget, and carries on at the requested timing so the caller
-can see for themselves what does and does not arrive.
+* Sending on/off pairs ourselves costs two commands per blink per lamp. The
+  bridge takes roughly ten light commands a second and silently drops the rest,
+  so a house-wide flash asks for several times what can arrive, and the result
+  is ragged.
+* `light.turn_on` with `flash: short` looks like a groupcast but is not: aiohue
+  expands it into one call per member light, which arrive one by one over the
+  better part of a second. Hence lamps blinking out of step.
+* `flash: long` does reach the group as one command, but starts a breathe that
+  runs about fifteen seconds on the lamp's own clock and cannot be stopped by
+  any ordinary state command. A three second flash lasted nineteen.
 
-One exception is worth the special case: flashing a Hue room or zone as a whole
-is a groupcast, one command no matter how many lamps hang behind it. When the
-target is a group and every lamp is meant to pulse together, the group entity is
-used directly and the budget stops mattering.
+None of those are fixable from this side, because the timing that matters
+happens after the command leaves. Signalling moves the whole sequence to where
+the lamps are, which is the only place it can be kept in time.
 
-Nothing here is verified or retried. A missed blink is a missed blink; insisting
-on it would leave the lamp switched on, which is the opposite of what a flash is
-for.
+What that costs: the rhythm of the blinking is the bridge's choice and cannot
+be set, and the duration has a step size of one second.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import random
-from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components.light import DOMAIN as LIGHT_DOMAIN
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.core import Context, HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.service import async_extract_entity_ids
 
@@ -50,24 +46,17 @@ _LOGGER = logging.getLogger(__name__)
 SERVICE_FLASH_LIGHTS = "flash_lights"
 
 ATTR_FLASH_DURATION = "flash_duration"
-ATTR_ON_DURATION = "on_duration"
-ATTR_OFF_DURATION = "off_duration"
-ATTR_CONCURRENT = "concurrent_lights"
-ATTR_BRIGHTNESS = "brightness"
 
-# Below this a pulse stops being a blink and becomes a flicker, and the lamp's
-# own fade swallows most of it. Kept low deliberately: what the bridge actually
-# delivers is the real limit, and that is reported separately rather than
-# pretended away by a schema bound.
-_MIN_PULSE_MS = 20
+# Toggles between full brightness and off, in the colour the lamp already has.
+_SIGNAL_ON_OFF = "on_off"
 
+# The bridge rounds the duration to whole seconds, so a request below one second
+# would round away to nothing. Better to refuse it than to flash unpredictably.
 FLASH_SCHEMA = vol.Schema(
     {
-        vol.Optional(ATTR_FLASH_DURATION, default=3000): vol.All(int, vol.Range(min=100, max=60000)),
-        vol.Optional(ATTR_ON_DURATION, default=250): vol.All(int, vol.Range(min=_MIN_PULSE_MS, max=10000)),
-        vol.Optional(ATTR_OFF_DURATION, default=250): vol.All(int, vol.Range(min=_MIN_PULSE_MS, max=10000)),
-        vol.Optional(ATTR_CONCURRENT, default=0): vol.All(int, vol.Range(min=0)),
-        vol.Optional(ATTR_BRIGHTNESS): vol.All(int, vol.Range(min=1, max=255)),
+        vol.Optional(ATTR_FLASH_DURATION, default=3000): vol.All(
+            int, vol.Range(min=1000, max=60000)
+        ),
         vol.Optional(ATTR_ENTITY_ID): cv.entity_ids,
         vol.Optional("device_id"): vol.Any(cv.string, [cv.string]),
         vol.Optional("area_id"): vol.Any(cv.string, [cv.string]),
@@ -76,15 +65,17 @@ FLASH_SCHEMA = vol.Schema(
 )
 
 
-async def _resolve(hass: HomeAssistant, definitions, call: ServiceCall) -> tuple[list[str], str | None]:
-    """Work out which lamps to pulse.
+async def _resolve(
+    hass: HomeAssistant, definitions, call: ServiceCall
+) -> tuple[list[str], str | None]:
+    """Work out what to signal.
 
     Returns the individual lamps plus, when the whole request happens to be a
-    single Hue group, that group entity -- the caller can then use it for a
-    groupcast instead of addressing every member.
+    single Hue group, that group entity -- signalling the group is one request
+    instead of one per lamp, and only the group keeps them in step.
     """
     # expand_group=False: a Hue group must stay recognisable as a group here,
-    # because flashing it as one costs a single command instead of one per lamp.
+    # because that is precisely what makes the flash synchronous.
     referenced = list(await async_extract_entity_ids(call, expand_group=False))
 
     group_entity: str | None = None
@@ -108,35 +99,8 @@ async def _resolve(hass: HomeAssistant, definitions, call: ServiceCall) -> tuple
     return list(dict.fromkeys(lamps)), group_entity
 
 
-def _budget_warning(
-    lamps_per_pulse: int, on_ms: int, off_ms: int, rate: int
-) -> str | None:
-    """Compare what was asked for against what the bridge can carry."""
-    if not rate:
-        return None
-    cycle_s = (on_ms + off_ms) / 1000
-    if cycle_s <= 0:
-        return None
-    needed = (lamps_per_pulse * 2) / cycle_s
-    if needed <= rate:
-        return None
-    return (
-        f"{needed:.0f} command(s)/s needed but the bridge takes about {rate}; "
-        f"lower concurrent_lights or lengthen on_duration/off_duration, "
-        f"or blinks will be dropped"
-    )
-
-
-async def async_register(hass: HomeAssistant, definitions, watcher) -> None:
+async def async_register(hass: HomeAssistant, definitions) -> None:
     """Register flash_lights once per Home Assistant."""
-
-    def _context() -> Context:
-        """A context the watcher recognises as ours, so it stays out of this."""
-        context = Context()
-        watcher._own_contexts.add(context.id)
-        if len(watcher._own_contexts) > 500:
-            watcher._own_contexts = set(list(watcher._own_contexts)[-250:])
-        return context
 
     async def _flash(call: ServiceCall) -> None:
         lamps, group_entity = await _resolve(hass, definitions, call)
@@ -145,55 +109,31 @@ async def async_register(hass: HomeAssistant, definitions, watcher) -> None:
             return
 
         total_ms = call.data[ATTR_FLASH_DURATION]
-        on_ms = call.data[ATTR_ON_DURATION]
-        off_ms = call.data[ATTR_OFF_DURATION]
-        concurrent = call.data[ATTR_CONCURRENT] or len(lamps)
-        concurrent = min(concurrent, len(lamps))
-        brightness = call.data.get(ATTR_BRIGHTNESS)
+        targets = [group_entity] if group_entity else lamps
 
-        # Whole set at once and the target was one group: use the group entity,
-        # which costs a single command per pulse instead of one per lamp.
-        as_group = group_entity is not None and concurrent >= len(lamps)
-        per_pulse = 1 if as_group else concurrent
-
-        if (warning := _budget_warning(per_pulse, on_ms, off_ms, watcher.options.command_rate)):
-            _LOGGER.warning("flash_lights: %s", warning)
-
-        on_data: dict[str, Any] = {"transition": 0}
-        if brightness is not None:
-            on_data[ATTR_BRIGHTNESS] = brightness
-
-        _LOGGER.debug(
-            "flash_lights: %d lamp(s), %d at a time%s, %dms on / %dms off, for %dms",
-            len(lamps), concurrent, " as one groupcast" if as_group else "",
-            on_ms, off_ms, total_ms,
+        results = await asyncio.gather(
+            *[
+                definitions.async_signal(target, _SIGNAL_ON_OFF, total_ms)
+                for target in targets
+            ]
         )
 
-        deadline = hass.loop.time() + total_ms / 1000
-        pulses = 0
-        while hass.loop.time() < deadline:
-            if as_group:
-                picked = [group_entity]
-            elif concurrent >= len(lamps):
-                picked = lamps
-            else:
-                # A fresh draw per pulse, so the flash travels through the house
-                # instead of hammering the same handful of lamps.
-                picked = random.sample(lamps, concurrent)
+        _LOGGER.debug(
+            "flash_lights: %dms on %s (%d lamp(s)), %d of %d accepted",
+            total_ms,
+            "the group as one" if group_entity else "each lamp separately",
+            len(lamps),
+            sum(results),
+            len(targets),
+        )
 
-            await hass.services.async_call(
-                LIGHT_DOMAIN, "turn_on", {ATTR_ENTITY_ID: picked, **on_data},
-                blocking=False, context=_context(),
-            )
-            await asyncio.sleep(on_ms / 1000)
-            await hass.services.async_call(
-                LIGHT_DOMAIN, "turn_off", {ATTR_ENTITY_ID: picked, "transition": 0},
-                blocking=False, context=_context(),
-            )
-            await asyncio.sleep(off_ms / 1000)
-            pulses += 1
-
-        _LOGGER.debug("flash_lights: %d pulse(s) sent", pulses)
+        # The request returns the moment the bridge accepts it, but the flash it
+        # starts runs for the full duration. Returning here would let whatever
+        # comes next -- a restore_state, typically -- land in the middle of it.
+        # Waiting keeps "flash for three seconds" meaning what it says, so a
+        # caller can simply put the next step after it.
+        if any(results):
+            await asyncio.sleep(total_ms / 1000)
 
     if not hass.services.has_service(DOMAIN, SERVICE_FLASH_LIGHTS):
         hass.services.async_register(

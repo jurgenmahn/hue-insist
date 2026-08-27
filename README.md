@@ -43,6 +43,9 @@ unicast, so the lamp gets a message it has to acknowledge.
 
 Works without any configuration. Every setting has a defensible default.
 
+Alongside the watching it ships three services -- flashing the lights, and
+snapshotting and restoring their state. See [Services](#services).
+
 ## Installation
 
 **Through HACS.** Add this repository as a custom repository (category:
@@ -159,68 +162,100 @@ somewhere else. Only the first is the problem this integration was built for.
 
 ## Services
 
-Three services ride along with the watcher, because they need the same two
-things it already knows: which lamps hide behind a group, and how to talk to the
-bridge without drowning it.
+Three services ship with the integration. They exist because of one concrete
+case -- a doorbell that should make the house flash and then leave it exactly as
+it was -- but each is useful on its own.
+
+Unlike the watching, these are **Hue-only**: they go to the bridge directly.
 
 ### `hue_insist.flash_lights`
 
-Pulses lights on and off for as long as you ask. Unlike `light.turn_on` with
-`flash: short`, which blinks everything once and simultaneously, this repeats --
-so the flash is hard to miss -- and can walk through a random subset of lamps
-per pulse.
+Blinks lights for a set time.
 
-| Field | Default | Meaning |
+| Field | Default | Notes |
 |---|---|---|
-| `flash_duration` | 3000 | total time to keep pulsing, in ms |
-| `on_duration` | 250 | how long a lamp stays on per pulse, in ms |
-| `off_duration` | 250 | how long it stays off between pulses, in ms |
-| `concurrent_lights` | 0 | lamps per pulse; 0 means all of them |
-| `brightness` | -- | brightness of the on-pulse |
+| `flash_duration` | 3000 | Milliseconds, 1000-60000. The bridge rounds to whole seconds. |
 
-Mind the bridge budget. A pulse over N lamps costs N commands and every pulse
-has an on and an off, so `concurrent_lights: 6` at 200ms on and 200ms off asks
-for 30 commands per second against a budget of about ten. The service logs a
-warning when the arithmetic does not fit; the blinks that do not fit are dropped
-silently by the bridge, as always.
+Targets a lamp, a Hue room or zone, a scene, an area or a label. When the target
+is a single Hue group it is flashed as a group: one request covering every lamp
+behind it. The service waits for the flash to finish before returning, so the
+next step in an automation lands after the flash rather than inside it.
 
-Targeting a single Hue room or zone with `concurrent_lights: 0` is the exception:
-that goes out as one groupcast per pulse, so only two commands per cycle
-regardless of how many lamps hang behind it.
+That is the whole interface. There is no way to set the rhythm, the brightness,
+how many lamps blink at once, or how long a single blink lasts -- the bridge
+decides all of it. That is not an omission; it is the point.
 
-Nothing here is verified or retried. A missed blink stays missed, because
-insisting on a flash would leave the lamp switched on -- the opposite of what a
-flash is for. For the same reason the watcher ignores any `light.turn_on` that
-carries `flash`.
+**Why the bridge does the work.** The obvious implementation is to send on and
+off from Home Assistant on a timer. Three variants of that were built and
+measured, and each failed for a reason that is invisible from this side:
+
+| Approach | What actually happens |
+|---|---|
+| Send on/off pairs ourselves | Two commands per blink per lamp. Against a ceiling of ten commands per second, a house-wide flash asks for several times what can arrive; the surplus is dropped silently and the result is ragged. |
+| `light.turn_on` with `flash: short` | Looks like a groupcast but is not. `aiohue` expands it into one call per member light. Measured over 33 lamps: about 640 ms for one "simultaneous" blink, so the lamps visibly blink out of step. |
+| `light.turn_on` with `flash: long` | Does reach the group as one command, but starts a breathe that runs on the lamp's own clock for roughly fifteen seconds and is not stopped by any ordinary state command. A three second flash was measured at nineteen. |
+
+The common thread is that all the timing that matters happens after the command
+leaves. Nothing on this side can fix that.
+
+The Hue v2 API has a signalling mechanism that takes a duration: given `on_off`
+and a number of milliseconds, the bridge runs the entire sequence itself and
+stops when it should. One request, every lamp in step by construction, and a
+duration that means what it says. Home Assistant does not expose it and neither
+does `aiohue`, so the integration sends it to the bridge itself.
 
 ### `hue_insist.save_state` and `hue_insist.restore_state`
 
-Named snapshots of light state, held in memory. The motivating case is a
-doorbell flash: something has to put the lights back afterwards.
+Remembers what the lights were doing, and puts them back.
+
+| Service | Field | Default | Notes |
+|---|---|---|---|
+| `save_state` | `name` | -- | Required. Names the snapshot. |
+| | `entity_id` | all lights | Optional. Groups are expanded to their members. |
+| `restore_state` | `name` | -- | Required. Must match a snapshot taken earlier. |
+| | `clear` | true | Whether to drop the snapshot after restoring. |
+
+Two deliberate choices. **Groups are expanded**, because restoring a room entity
+would push one aggregate state onto every lamp behind it and wipe the per-lamp
+detail the snapshot exists to preserve. And **snapshots live in memory only**:
+they exist to bridge a few seconds, so surviving a restart is not worth the
+writes, and a stale snapshot restored hours later would be worse than none.
+
+Restoring goes back out through `light.turn_on` and `light.turn_off`, so the
+integration verifies the result per lamp like any other command. Lamps that need
+the same end state are batched into one call, which for a room set from a single
+scene is usually one call for the lot.
+
+### Together
 
 ```yaml
-- action: hue_insist.save_state
-  data: {name: doorbell}
-- action: hue_insist.flash_lights
-  target: {entity_id: light.home}
-  data: {flash_duration: 5000, on_duration: 50, off_duration: 25}
-- action: hue_insist.restore_state
-  data: {name: doorbell}
+actions:
+  - action: hue_insist.save_state
+    data:
+      name: doorbell
+  - parallel:
+      - action: hue_insist.flash_lights
+        target:
+          entity_id: light.home
+        data:
+          flash_duration: 3000
+      - action: notify.mobile_app_phone
+        data:
+          message: Someone is at the door
+  - delay:
+      milliseconds: 400
+  - action: hue_insist.restore_state
+    data:
+      name: doorbell
 ```
 
-`save_state` takes an optional `entity_id`; leave it out to capture every light
-in the house. Groups are expanded to their members, because restoring a room
-entity would push one aggregate state onto every lamp behind it and wipe the
-per-lamp detail the snapshot exists to preserve.
+The short delay lets the last blink settle before the lamps are put back.
 
-`restore_state` drops the snapshot once used unless you pass `clear: false`.
-Lamps that need the same end state are batched into one call, so putting 33
-lamps back typically costs eight commands rather than 33. The restore itself
-goes out through `light.turn_on` / `light.turn_off`, so the watcher verifies it
-like any other command.
-
-Snapshots do not survive a restart. They exist to bridge a few seconds; a stale
-one restored hours later would be worse than none at all.
+A flash is momentary, so the watching deliberately steps aside for it: any
+`light` call carrying a `flash` attribute is ignored rather than verified.
+Without that, "everybody on" would be read as the intent and every lamp that
+stayed dark would be switched on -- turning a doorbell flash into a house that
+stays lit.
 
 ## Sensors
 

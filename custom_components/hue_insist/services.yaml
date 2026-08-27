@@ -51,10 +51,12 @@ restore_state:
 flash_lights:
   name: Flash lights
   description: >-
-    Pulses lights on and off for a while, so the flash is hard to miss. Unlike
-    light.turn_on with flash, this blinks repeatedly and can walk through a
-    random subset of lamps per pulse. Nothing here is verified or retried: a
-    missed blink stays missed, because insisting would leave the lamp on.
+    Blinks lights for a set time by handing the whole sequence to the Hue
+    bridge, which runs it itself. On a room or zone that is one request for the
+    entire group, so every lamp blinks in step. The rhythm is the bridge's
+    choice and cannot be set; only how long it lasts is yours. Lamps do not
+    necessarily end up as they started, so pair this with save_state and
+    restore_state when that matters.
   target:
     entity:
       domain:
@@ -62,35 +64,10 @@ flash_lights:
         - scene
   fields:
     flash_duration:
-      name: Total duration
-      description: How long to keep pulsing, in milliseconds.
+      name: Duration
+      description: >-
+        How long to keep blinking, in milliseconds. The bridge rounds this to
+        whole seconds.
       default: 3000
       selector:
-        number: {min: 100, max: 60000, step: 100, unit_of_measurement: ms, mode: box}
-    on_duration:
-      name: On time
-      description: How long a lamp stays on per pulse, in milliseconds.
-      default: 250
-      selector:
-        number: {min: 20, max: 10000, step: 5, unit_of_measurement: ms, mode: box}
-    off_duration:
-      name: Off time
-      description: How long a lamp stays off between pulses, in milliseconds.
-      default: 250
-      selector:
-        number: {min: 20, max: 10000, step: 5, unit_of_measurement: ms, mode: box}
-    concurrent_lights:
-      name: Lights at a time
-      description: >-
-        How many lamps pulse together. 0 means all of them; a lower number draws
-        a fresh random subset each pulse, which ripples through the house and is
-        much kinder to the bridge.
-      default: 0
-      selector:
-        number: {min: 0, max: 50, step: 1, mode: box}
-    brightness:
-      name: Brightness
-      description: Brightness of the on-pulse. Leave empty to use whatever the lamp defaults to.
-      required: false
-      selector:
-        number: {min: 1, max: 255, step: 1, mode: slider}
+        number: {min: 1000, max: 60000, step: 1000, unit_of_measurement: ms, mode: box}

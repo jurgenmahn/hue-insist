@@ -142,7 +142,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # save_state / restore_state are global, not per config entry: they are
     # registered once and keep their snapshots when an entry reloads.
     await async_register_snapshots(hass, definitions)
-    await async_register_flash(hass, definitions, watcher)
+    await async_register_flash(hass, definitions)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _LOGGER.info(

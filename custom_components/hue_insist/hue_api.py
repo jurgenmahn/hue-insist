@@ -135,6 +135,69 @@ class HueDefinitions:
     def entity_for(self, rid: str) -> str | None:
         return self._rid_to_entity.get(rid)
 
+    def _resource_for(self, entity_id: str) -> tuple[str, str] | None:
+        """Map a Home Assistant entity onto its Hue resource and type.
+
+        The Hue integration uses the bridge's own resource id as unique_id, so
+        no matching is needed -- only deciding which of the two kinds it is, and
+        the group table already answers that.
+        """
+        registry = er.async_get(self.hass)
+        entry = registry.async_get(entity_id)
+        if entry is None or entry.platform != HUE_DOMAIN or not entry.unique_id:
+            return None
+        kind = "grouped_light" if entry.unique_id in self._groups else "light"
+        return kind, entry.unique_id
+
+    async def async_signal(
+        self, entity_id: str, signal: str, duration_ms: int | None = None
+    ) -> bool:
+        """Start or stop a bridge-side signal on a lamp, room or zone.
+
+        This is the one thing the bridge does far better than we can from here:
+        given a duration it runs the whole blinking sequence itself, so a room
+        blinks as one and stops exactly when it should. Home Assistant's light
+        services do not expose it and neither does aiohue, hence the direct PUT.
+
+        Duration has a step size of one second on the bridge; anything finer is
+        rounded there, not here, so the caller sees what it asked for in the log.
+        """
+        if not self.available or not self._host or not self._key:
+            _LOGGER.warning(
+                "Cannot signal %s: no usable connection to the Hue bridge",
+                entity_id,
+            )
+            return False
+
+        resolved = self._resource_for(entity_id)
+        if resolved is None:
+            _LOGGER.warning("Cannot signal %s: not a Hue entity", entity_id)
+            return False
+        kind, rid = resolved
+
+        body: dict[str, Any] = {"signaling": {"signal": signal}}
+        if duration_ms is not None and signal != "no_signal":
+            # no_signal ignores duration; sending it anyway is merely noise.
+            body["signaling"]["duration"] = min(duration_ms, 65534000)
+
+        try:
+            await self._put(kind, rid, body)
+        except (aiohttp.ClientError, TimeoutError) as err:
+            _LOGGER.warning("Signal %s on %s failed: %s", signal, entity_id, err)
+            return False
+        return True
+
+    async def _put(self, resource: str, rid: str, body: dict[str, Any]) -> None:
+        session = async_get_clientsession(self.hass, verify_ssl=False)
+        url = f"https://{self._host}/clip/v2/resource/{resource}/{rid}"
+        async with session.put(
+            url,
+            headers={"hue-application-key": self._key},
+            json=body,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            resp.raise_for_status()
+
     def scene_targets(self, scene_entity: str) -> dict[str, dict[str, Any]]:
         """Return the intended end state per lamp entity for a scene."""
         registry = er.async_get(self.hass)
