@@ -173,6 +173,19 @@ class Watcher:
 
         kinds: set[str] = set()
         if domain == "light" and service in ("turn_on", "turn_off", "toggle"):
+            # A flash is momentary: the caller wants a blink, not an end state.
+            # Verifying it would read "everybody on" as the intent and switch on
+            # every lamp that stayed dark -- turning a doorbell flash into a
+            # house that stays lit. There is nothing to insist on here, because
+            # the lamp is supposed to return to what it was doing.
+            if "flash" in (data.get("service_data") or {}):
+                _LOGGER.debug(
+                    "Ignoring light.%s on %s -- flash is momentary, "
+                    "the end state is not a target",
+                    service,
+                    ", ".join(self._entities_from(data.get("service_data", {}))) or "nothing",
+                )
+                return
             requested = self._entities_from(data.get("service_data", {}))
             targets = self._targets_for_light(service, data.get("service_data", {}), kinds)
             source = f"light.{service}"

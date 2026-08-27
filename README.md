@@ -157,6 +157,71 @@ The reason per lamp is the useful part. "off, expected on" is a missed command;
 "brightness 140, expected 254" is a lamp that got the message but landed
 somewhere else. Only the first is the problem this integration was built for.
 
+## Services
+
+Three services ride along with the watcher, because they need the same two
+things it already knows: which lamps hide behind a group, and how to talk to the
+bridge without drowning it.
+
+### `hue_insist.flash_lights`
+
+Pulses lights on and off for as long as you ask. Unlike `light.turn_on` with
+`flash: short`, which blinks everything once and simultaneously, this repeats --
+so the flash is hard to miss -- and can walk through a random subset of lamps
+per pulse.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `flash_duration` | 3000 | total time to keep pulsing, in ms |
+| `on_duration` | 250 | how long a lamp stays on per pulse, in ms |
+| `off_duration` | 250 | how long it stays off between pulses, in ms |
+| `concurrent_lights` | 0 | lamps per pulse; 0 means all of them |
+| `brightness` | -- | brightness of the on-pulse |
+
+Mind the bridge budget. A pulse over N lamps costs N commands and every pulse
+has an on and an off, so `concurrent_lights: 6` at 200ms on and 200ms off asks
+for 30 commands per second against a budget of about ten. The service logs a
+warning when the arithmetic does not fit; the blinks that do not fit are dropped
+silently by the bridge, as always.
+
+Targeting a single Hue room or zone with `concurrent_lights: 0` is the exception:
+that goes out as one groupcast per pulse, so only two commands per cycle
+regardless of how many lamps hang behind it.
+
+Nothing here is verified or retried. A missed blink stays missed, because
+insisting on a flash would leave the lamp switched on -- the opposite of what a
+flash is for. For the same reason the watcher ignores any `light.turn_on` that
+carries `flash`.
+
+### `hue_insist.save_state` and `hue_insist.restore_state`
+
+Named snapshots of light state, held in memory. The motivating case is a
+doorbell flash: something has to put the lights back afterwards.
+
+```yaml
+- action: hue_insist.save_state
+  data: {name: doorbell}
+- action: hue_insist.flash_lights
+  target: {entity_id: light.home}
+  data: {flash_duration: 5000, on_duration: 50, off_duration: 25}
+- action: hue_insist.restore_state
+  data: {name: doorbell}
+```
+
+`save_state` takes an optional `entity_id`; leave it out to capture every light
+in the house. Groups are expanded to their members, because restoring a room
+entity would push one aggregate state onto every lamp behind it and wipe the
+per-lamp detail the snapshot exists to preserve.
+
+`restore_state` drops the snapshot once used unless you pass `clear: false`.
+Lamps that need the same end state are batched into one call, so putting 33
+lamps back typically costs eight commands rather than 33. The restore itself
+goes out through `light.turn_on` / `light.turn_off`, so the watcher verifies it
+like any other command.
+
+Snapshots do not survive a restart. They exist to bridge a few seconds; a stale
+one restored hours later would be worse than none at all.
+
 ## Sensors
 
 All sensors are diagnostic and survive a restart -- counters and timestamps

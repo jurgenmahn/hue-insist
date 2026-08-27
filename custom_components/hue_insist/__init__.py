@@ -49,7 +49,9 @@ from .const import (
     DEFAULT_SKIP_UNAVAILABLE,
     DOMAIN,
 )
+from .flash import async_register as async_register_flash
 from .hue_api import HueDefinitions
+from .snapshots import async_register as async_register_snapshots
 from .watcher import Watcher
 
 _LOGGER = logging.getLogger(__name__)
@@ -136,6 +138,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_track_time_interval(hass, _ververs, REFRESH_INTERVAL)
     )
     entry.async_on_unload(entry.add_update_listener(_options_updated))
+
+    # save_state / restore_state are global, not per config entry: they are
+    # registered once and keep their snapshots when an entry reloads.
+    await async_register_snapshots(hass, definitions)
+    await async_register_flash(hass, definitions, watcher)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _LOGGER.info(

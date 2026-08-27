@@ -1,0 +1,96 @@
+save_state:
+  name: Save state
+  description: >-
+    Stores the current state of light entities under a name, in memory. Groups
+    are expanded to their individual lamps, so the restore keeps per-lamp
+    brightness and colour instead of flattening a whole room to one value.
+  fields:
+    name:
+      name: Name
+      description: Label to store under. Saving again under the same name replaces it.
+      required: true
+      example: voor_deurbelflits
+      selector:
+        text:
+    entity_id:
+      name: Lights
+      description: >-
+        Which lights to capture. Leave empty for every light in the house;
+        groups may be given and are expanded to their members.
+      required: false
+      selector:
+        entity:
+          multiple: true
+          domain: light
+
+restore_state:
+  name: Restore state
+  description: >-
+    Puts the lights back the way a saved snapshot found them. Lamps that were
+    off go off, lamps that were on get their brightness and colour back. Runs
+    through light.turn_on and light.turn_off, so Hue Insist verifies the result
+    per lamp like any other command.
+  fields:
+    name:
+      name: Name
+      description: Which snapshot to restore.
+      required: true
+      example: voor_deurbelflits
+      selector:
+        text:
+    clear:
+      name: Clear afterwards
+      description: >-
+        Drop the snapshot once restored. Turn this off to restore the same
+        snapshot more than once.
+      required: false
+      default: true
+      selector:
+        boolean:
+
+flash_lights:
+  name: Flash lights
+  description: >-
+    Pulses lights on and off for a while, so the flash is hard to miss. Unlike
+    light.turn_on with flash, this blinks repeatedly and can walk through a
+    random subset of lamps per pulse. Nothing here is verified or retried: a
+    missed blink stays missed, because insisting would leave the lamp on.
+  target:
+    entity:
+      domain:
+        - light
+        - scene
+  fields:
+    flash_duration:
+      name: Total duration
+      description: How long to keep pulsing, in milliseconds.
+      default: 3000
+      selector:
+        number: {min: 100, max: 60000, step: 100, unit_of_measurement: ms, mode: box}
+    on_duration:
+      name: On time
+      description: How long a lamp stays on per pulse, in milliseconds.
+      default: 250
+      selector:
+        number: {min: 20, max: 10000, step: 5, unit_of_measurement: ms, mode: box}
+    off_duration:
+      name: Off time
+      description: How long a lamp stays off between pulses, in milliseconds.
+      default: 250
+      selector:
+        number: {min: 20, max: 10000, step: 5, unit_of_measurement: ms, mode: box}
+    concurrent_lights:
+      name: Lights at a time
+      description: >-
+        How many lamps pulse together. 0 means all of them; a lower number draws
+        a fresh random subset each pulse, which ripples through the house and is
+        much kinder to the bridge.
+      default: 0
+      selector:
+        number: {min: 0, max: 50, step: 1, mode: box}
+    brightness:
+      name: Brightness
+      description: Brightness of the on-pulse. Leave empty to use whatever the lamp defaults to.
+      required: false
+      selector:
+        number: {min: 1, max: 255, step: 1, mode: slider}
