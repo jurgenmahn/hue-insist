@@ -291,7 +291,7 @@ class Watcher:
 
             deviations = {}
             for lamp, target in job.targets.items():
-                reason = self._deviation(lamp, target)
+                reason = self._deviation(lamp, target, attempt)
                 if reason:
                     deviations[lamp] = reason
             deviating = {lamp: job.targets[lamp] for lamp in deviations}
@@ -341,7 +341,9 @@ class Watcher:
         # failures every single time would drown out the real ones.
         remaining = [
             lamp for lamp, target in job.targets.items()
-            if self._deviation(lamp, target) and not self._unverifiable(lamp)
+            if self._deviation(lamp, target, attempt=2)
+            and not self._unverifiable(lamp)
+            and not self.definitions.is_unreliable(lamp)
         ]
         if remaining:
             self.stats.failures += len(remaining)
@@ -398,7 +400,7 @@ class Watcher:
                 waited, len(job.targets),
             )
 
-    def _deviation(self, lamp: str, target: Target) -> str | None:
+    def _deviation(self, lamp: str, target: Target, attempt: int = 1) -> str | None:
         """Say how a lamp differs from what was asked, or None when it matches.
 
         Returning the reason rather than a bare boolean is what makes the log
@@ -425,6 +427,18 @@ class Watcher:
         actually_on = state.state == STATE_ON
         if actually_on != target.on:
             return f"{state.state}, expected {'on' if target.on else 'off'}"
+
+        # The bridge writes a lamp's state when it sends the command, not when
+        # the lamp answers. For a lamp it flags as hard to reach, "on" is its
+        # own assumption, and comparing against an assumption is how a strip
+        # stays dark while the log says every lamp is correct.
+        #
+        # Only on the first round: the follow-up cannot tell us anything either,
+        # so repeating it would send the same unicast three times and then
+        # report a failure nobody can act on.
+        if attempt == 1 and target.on and self.definitions.is_unreliable(lamp):
+            return "reachable only intermittently, repeating as unicast"
+
         if not target.on:
             return None
 

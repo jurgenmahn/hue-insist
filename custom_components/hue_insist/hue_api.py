@@ -41,6 +41,7 @@ class HueDefinitions:
         self._scenes: dict[str, list[dict[str, Any]]] = {}
         self._groups: dict[str, list[str]] = {}
         self._rid_to_entity: dict[str, str] = {}
+        self._unreliable: set[str] = set()
         self.available = False
 
     def _credentials(self) -> tuple[str, str] | None:
@@ -71,6 +72,7 @@ class HueDefinitions:
             rooms = await self._get("room")
             zones = await self._get("zone")
             devices = await self._get("device")
+            connectivity = await self._get("zigbee_connectivity")
         except (aiohttp.ClientError, TimeoutError) as err:
             self.available = False
             _LOGGER.warning("Could not query the Hue bridge: %s", err)
@@ -103,6 +105,7 @@ class HueDefinitions:
                     self._groups[svc["rid"]] = lights
 
         self._build_entity_map()
+        self._build_unreliable(devices, connectivity)
         self.available = True
         _LOGGER.debug(
             "Hue definitions refreshed: %d scenes, %d groups, %d entities linked",
@@ -134,6 +137,56 @@ class HueDefinitions:
 
     def entity_for(self, rid: str) -> str | None:
         return self._rid_to_entity.get(rid)
+
+    def _build_unreliable(
+        self, devices: list[dict[str, Any]], connectivity: list[dict[str, Any]]
+    ) -> None:
+        """Note which lamps the bridge itself says it struggles to reach.
+
+        The bridge marks its own state optimistically: it writes "on" when it
+        sends the command, not when a lamp confirms. For a lamp it reaches
+        reliably that is close enough to the truth. For one it flags with a
+        connectivity issue it is a guess, and checking a lamp against a guess is
+        how a strip stays dark while everything reports correct.
+
+        Zigbee connectivity hangs off the device, while the state belongs to the
+        light service, so the two are joined through the device's own services.
+        """
+        by_device = {
+            entry["owner"]["rid"]: entry.get("status")
+            for entry in connectivity
+            if entry.get("owner", {}).get("rtype") == "device"
+        }
+
+        unreliable: set[str] = set()
+        for device in devices:
+            status = by_device.get(device["id"])
+            if status in (None, "connected"):
+                continue
+            for service in device.get("services", []):
+                if service.get("rtype") != "light":
+                    continue
+                entity = self._rid_to_entity.get(service["rid"])
+                if entity:
+                    unreliable.add(entity)
+
+        if unreliable != self._unreliable:
+            _LOGGER.info(
+                "Bridge reports a connectivity issue for %d lamp(s): %s. Their "
+                "reported state is the bridge's assumption rather than the "
+                "lamp's answer, so a command to one of them is repeated as a "
+                "unicast even when the state already looks right",
+                len(unreliable), ", ".join(sorted(unreliable)) or "none",
+            )
+        self._unreliable = unreliable
+
+    def is_unreliable(self, entity_id: str) -> bool:
+        """Whether the bridge currently reports trouble reaching this lamp."""
+        return entity_id in self._unreliable
+
+    @property
+    def unreliable_lamps(self) -> set[str]:
+        return set(self._unreliable)
 
     def _resource_for(self, entity_id: str) -> tuple[str, str] | None:
         """Map a Home Assistant entity onto its Hue resource and type.
